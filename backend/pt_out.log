@@ -1,0 +1,76 @@
+============================= test session starts =============================
+platform win32 -- Python 3.14.5, pytest-8.4.2, pluggy-1.6.0
+rootdir: C:\Users\MrSp\Desktop\Projects-2026\LifeGraph\backend
+configfile: pyproject.toml
+testpaths: tests
+plugins: hypothesis-6.155.0, cov-5.0.0
+collected 438 items
+
+tests\test_api.py ................................                       [  7%]
+tests\test_api_high_degree_property.py .                                 [  7%]
+tests\test_api_manual_node_property.py .                                 [  7%]
+tests\test_api_nodes_edges.py ................................           [ 15%]
+tests\test_api_property.py ..                                            [ 15%]
+tests\test_config.py ...........................                         [ 21%]
+tests\test_config_property.py .                                          [ 21%]
+tests\test_dashboard.py ....                                             [ 22%]
+tests\test_dashboard_property.py ..                                      [ 23%]
+tests\test_domain.py ................................                    [ 30%]
+tests\test_loopback_property.py ....                                     [ 31%]
+tests\test_ollama_client.py .......................                      [ 36%]
+tests\test_parser.py .................................                   [ 44%]
+tests\test_parser_property.py ..........                                 [ 46%]
+tests\test_search.py ..................                                  [ 50%]
+tests\test_search_property.py .                                          [ 50%]
+tests\test_serializer.py ..............                                  [ 54%]
+tests\test_serializer_property.py ....                                   [ 55%]
+tests\test_smoke.py .                                                    [ 55%]
+tests\test_store.py ........................................             [ 64%]
+tests\test_store_apply_proposal.py ............                          [ 67%]
+tests\test_store_apply_proposal_property.py .                            [ 67%]
+tests\test_store_confirm_reject_property.py .                            [ 67%]
+tests\test_store_delete_node.py .......                                  [ 69%]
+tests\test_store_edge_write.py ......................                    [ 74%]
+tests\test_store_property.py F..........................                 [ 80%]
+tests\test_store_write.py ......................................         [ 89%]
+tests\test_validation.py ............................................... [ 99%]
+.                                                                        [100%]
+
+================================== FAILURES ===================================
+_______________________ test_attribute_edit_round_trip ________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "C:\Users\MrSp\Desktop\Projects-2026\LifeGraph\backend\tests\test_store_property.py", line 64, in test_attribute_edit_round_trip
+  |     @given(
+  |     
+  |   File "C:\Users\MrSp\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\hypothesis\core.py", line 2264, in wrapped_test
+  |     raise the_error_hypothesis_found
+  | hypothesis.errors.FlakyFailure: Hypothesis test_attribute_edit_round_trip(node_type=NodeType.SKILL, label='0', initial_attrs={}, updated_attrs={}) produces unreliable results: Falsified on the first call but did not on a subsequent one (1 sub-exception)
+  | Falsifying example: test_attribute_edit_round_trip(
+  |     node_type=NodeType.SKILL,
+  |     label='0',
+  |     initial_attrs={},
+  |     updated_attrs={},
+  | )
+  | Unreliable test timings! On an initial run, this test took 262.73ms, which exceeded the deadline of 200.00ms, but on a subsequent run it took 27.14 ms, which did not. If you expect this sort of variability in your test timings, consider turning deadlines off for this test by setting deadline=None.
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "C:\Users\MrSp\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\hypothesis\core.py", line 1211, in _execute_once_for_engine
+    |     result = self.execute_once(data)
+    |   File "C:\Users\MrSp\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\hypothesis\core.py", line 1150, in execute_once
+    |     result = self.test_runner(data, run)
+    |   File "C:\Users\MrSp\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\hypothesis\core.py", line 824, in default_executor
+    |     return function(data)
+    |   File "C:\Users\MrSp\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\hypothesis\core.py", line 1107, in run
+    |     return test(*args, **kwargs)
+    |   File "C:\Users\MrSp\Desktop\Projects-2026\LifeGraph\backend\tests\test_store_property.py", line 64, in test_attribute_edit_round_trip
+    |     @given(
+    |     
+    |   File "C:\Users\MrSp\AppData\Local\Python\pythoncore-3.14-64\Lib\site-packages\hypothesis\core.py", line 1041, in test
+    |     raise DeadlineExceeded(
+    |         datetime.timedelta(seconds=runtime), self.settings.deadline
+    |     )
+    | hypothesis.errors.DeadlineExceeded: Test took 262.73ms, which exceeds the deadline of 200.00ms. If you expect test cases to take this long, you can use @settings(deadline=...) to either set a higher deadline, or to disable it with deadline=None.
+    +------------------------------------
+=========================== short test summary info ===========================
+FAILED tests/test_store_property.py::test_attribute_edit_round_trip - Deadlin...
+======================= 1 failed, 437 passed in 29.42s ========================

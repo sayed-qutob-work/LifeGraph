@@ -1,0 +1,12 @@
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mC:/Users/MrSp/Desktop/Projects-2026/LifeGraph/frontend[39m
+
+ [32m✓[39m tests/smoke.test.js [2m([22m[2m2 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m tests/graphView.test.js [2m([22m[2m2 tests[22m[2m)[22m[90m 18[2mms[22m[39m
+ [32m✓[39m tests/nodeTypeStyle.test.js [2m([22m[2m2 tests[22m[2m)[22m[90m 12[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m      Tests [22m [1m[32m6 passed[39m[22m[90m (6)[39m
+[2m   Start at [22m 23:52:22
+[2m   Duration [22m 615ms[2m (transform 54ms, setup 0ms, collect 513ms, tests 36ms, environment 1ms, prepare 394ms)[22m
+
