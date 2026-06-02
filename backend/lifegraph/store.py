@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Callable
 
 from lifegraph.domain import (
+    EDGE_TYPE_VALUES,
     Edge,
     EdgeType,
     Graph,
     Node,
     NodeType,
+    NODE_TYPE_VALUES,
     ProposedGraph,
     normalize,
 )
@@ -94,29 +96,42 @@ def uuid4_str() -> str:
 # Schema SQL
 # ---------------------------------------------------------------------------
 
-_SCHEMA_SQL = """\
-PRAGMA foreign_keys = ON;
+_NODE_TYPE_CHECK = ",".join(f"'{value}'" for value in sorted(NODE_TYPE_VALUES))
+_EDGE_TYPE_CHECK = ",".join(f"'{value}'" for value in sorted(EDGE_TYPE_VALUES))
 
+_CREATE_NODES_SQL = f"""\
 CREATE TABLE IF NOT EXISTS nodes (
     id               TEXT PRIMARY KEY,
-    type             TEXT NOT NULL CHECK (type IN ('Skill','Goal','Habit','Project','Event','Person','Resource')),
+    type             TEXT NOT NULL CHECK (type IN ({_NODE_TYPE_CHECK})),
     label            TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 200),
     normalized_label TEXT NOT NULL,
-    attributes       TEXT NOT NULL DEFAULT '{}',
+    attributes       TEXT NOT NULL DEFAULT '{{}}',
     UNIQUE (normalized_label, type)
-);
+)
+"""
 
+_CREATE_EDGES_SQL = f"""\
 CREATE TABLE IF NOT EXISTS edges (
     id        TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     target_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    type      TEXT NOT NULL CHECK (type IN ('requires','supports','conflicts_with','motivated_by','leads_to','part_of','owned_by','blocks','related_to')),
+    type      TEXT NOT NULL CHECK (type IN ({_EDGE_TYPE_CHECK})),
     CHECK (source_id <> target_id)
-);
+)
+"""
 
+_INDEX_SQL = """\
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
+"""
+
+_SCHEMA_SQL = f"""\
+PRAGMA foreign_keys = ON;
+
+{_CREATE_NODES_SQL};
+{_CREATE_EDGES_SQL};
+{_INDEX_SQL}
 """
 
 
@@ -180,6 +195,7 @@ class GraphStore:
         else:
             # Existing database — verify tables are present
             self._verify_tables()
+            self._migrate_schema_if_needed()
 
     def _validate_existing_db(self, path: Path) -> None:
         """Check that an existing file is a valid SQLite database.
@@ -215,6 +231,62 @@ class GraphStore:
                 f"{', '.join(sorted(missing))}. The file will not be overwritten.",
                 path=self._db_path,
             )
+
+    def _migrate_schema_if_needed(self) -> None:
+        """Rebuild tables when existing CHECK constraints lack current enum values."""
+        assert self._conn is not None
+        conn = self._conn
+
+        if (
+            self._table_allows_values("nodes", NODE_TYPE_VALUES)
+            and self._table_allows_values("edges", EDGE_TYPE_VALUES)
+        ):
+            return
+
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("BEGIN")
+        try:
+            conn.execute("DROP INDEX IF EXISTS idx_nodes_type")
+            conn.execute("DROP INDEX IF EXISTS idx_edges_source")
+            conn.execute("DROP INDEX IF EXISTS idx_edges_target")
+
+            conn.execute("ALTER TABLE edges RENAME TO edges_old")
+            conn.execute("ALTER TABLE nodes RENAME TO nodes_old")
+
+            conn.execute(_CREATE_NODES_SQL)
+            conn.execute(_CREATE_EDGES_SQL)
+
+            conn.execute(
+                "INSERT INTO nodes (id, type, label, normalized_label, attributes) "
+                "SELECT id, type, label, normalized_label, attributes FROM nodes_old"
+            )
+            conn.execute(
+                "INSERT INTO edges (id, source_id, target_id, type) "
+                "SELECT id, source_id, target_id, type FROM edges_old"
+            )
+
+            conn.execute("DROP TABLE edges_old")
+            conn.execute("DROP TABLE nodes_old")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+
+        conn.executescript(_INDEX_SQL)
+
+    def _table_allows_values(self, table_name: str, values: frozenset[str]) -> bool:
+        """Return true when a table's CREATE SQL mentions every enum value."""
+        assert self._conn is not None
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        if row is None or not row["sql"]:
+            return False
+        create_sql = row["sql"]
+        return all(f"'{value}'" in create_sql for value in values)
 
     # ------------------------------------------------------------------
     # Connection helpers

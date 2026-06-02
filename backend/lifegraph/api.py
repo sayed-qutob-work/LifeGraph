@@ -512,6 +512,7 @@ def _register_routes(app: Flask) -> None:
         Errors: 400 if no pending proposal exists.
         """
         store: GraphStore = app.config["STORE"]
+        parser: InputParser = app.config["PARSER"]
         pending = app.config.get("PENDING_PROPOSAL")
 
         if pending is None:
@@ -520,7 +521,14 @@ def _register_routes(app: Flask) -> None:
                 400,
             )
 
-        result = store.apply_proposal(pending)
+        edited = request.get_json(silent=True) or {}
+        proposal = (
+            parser.proposal_from_raw(edited)
+            if isinstance(edited, dict) and ("nodes" in edited or "edges" in edited)
+            else pending
+        )
+
+        result = store.apply_proposal(proposal)
         app.config["PENDING_PROPOSAL"] = None
 
         return jsonify(serialize_graph(result)), 200

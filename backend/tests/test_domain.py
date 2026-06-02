@@ -25,12 +25,48 @@ from lifegraph.domain import (
 
 class TestNodeType:
     def test_all_members_present(self):
-        expected = {"Skill", "Goal", "Habit", "Project", "Event", "Person", "Resource"}
+        expected = {
+            "Skill",
+            "Goal",
+            "Habit",
+            "Project",
+            "Event",
+            "Person",
+            "Organization",
+            "Program",
+            "Tool",
+            "Technology",
+            "Model",
+            "Hardware",
+            "Topic",
+            "Recipe",
+            "Issue",
+            "Place",
+            "Resource",
+        }
         assert {nt.value for nt in NodeType} == expected
 
     def test_node_type_values_frozenset(self):
         assert NODE_TYPE_VALUES == frozenset(
-            ["Skill", "Goal", "Habit", "Project", "Event", "Person", "Resource"]
+            [
+                "Skill",
+                "Goal",
+                "Habit",
+                "Project",
+                "Event",
+                "Person",
+                "Organization",
+                "Program",
+                "Tool",
+                "Technology",
+                "Model",
+                "Hardware",
+                "Topic",
+                "Recipe",
+                "Issue",
+                "Place",
+                "Resource",
+            ]
         )
 
     def test_lookup_by_value(self):
@@ -50,6 +86,20 @@ class TestNodeType:
 class TestEdgeType:
     def test_all_members_present(self):
         expected = {
+            "uses",
+            "runs_model",
+            "current_model",
+            "considering_model",
+            "compared_with",
+            "for",
+            "has_issue",
+            "possible_cause",
+            "at",
+            "referred_by",
+            "focuses_on",
+            "practices_on",
+            "status",
+            "deadline",
             "requires",
             "supports",
             "conflicts_with",
@@ -65,6 +115,20 @@ class TestEdgeType:
     def test_edge_type_values_frozenset(self):
         assert EDGE_TYPE_VALUES == frozenset(
             [
+                "uses",
+                "runs_model",
+                "current_model",
+                "considering_model",
+                "compared_with",
+                "for",
+                "has_issue",
+                "possible_cause",
+                "at",
+                "referred_by",
+                "focuses_on",
+                "practices_on",
+                "status",
+                "deadline",
                 "requires",
                 "supports",
                 "conflicts_with",

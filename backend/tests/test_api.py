@@ -18,7 +18,8 @@ from lifegraph.api import (
     serialize_graph,
     serialize_node,
 )
-from lifegraph.domain import Edge, EdgeType, Graph, Node, NodeType
+from lifegraph.domain import Edge, EdgeType, Graph, Node, NodeType, ProposedGraph, ProposedNode
+from lifegraph.parser import InputParser
 from lifegraph.ollama_client import (
     ExternalConnectionError,
     OllamaTimeoutError,
@@ -55,6 +56,11 @@ def app(tmp_db: str):
 def client(app):
     """Create a Flask test client."""
     return app.test_client()
+
+
+class FakeOllama:
+    def parse_sentence(self, sentence: str) -> dict:
+        return {"nodes": [], "edges": []}
 
 
 def _seed_store(app) -> None:
@@ -449,3 +455,34 @@ class TestGetGraphRoute:
         assert edge["source"] == "n1"
         assert edge["target"] == "n2"
         assert edge["type"] == "supports"
+
+
+class TestConfirmProposalRoute:
+    def test_confirm_uses_edited_proposal_body(self, tmp_db: str) -> None:
+        parser = InputParser(FakeOllama())
+        app = create_app({"db_path": tmp_db, "TESTING": True, "parser": parser})
+        app.config["PENDING_PROPOSAL"] = ProposedGraph(
+            nodes=[ProposedNode(NodeType.SKILL, "Original", {})],
+            edges=[],
+        )
+
+        client = app.test_client()
+        resp = client.post(
+            "/api/parse/confirm",
+            json={
+                "nodes": [
+                    {
+                        "label": "Ollama",
+                        "type": "Tool",
+                        "attributes": {"kind": "local runner"},
+                    }
+                ],
+                "edges": [],
+            },
+        )
+
+        assert resp.status_code == 200
+        graph = app.config["STORE"].get_graph()
+        assert [(n.label, n.type, n.attributes) for n in graph.nodes] == [
+            ("Ollama", NodeType.TOOL, {"kind": "local runner"})
+        ]

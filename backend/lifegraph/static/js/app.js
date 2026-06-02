@@ -26,6 +26,20 @@
         entitiesContainer: null,
     };
 
+    var NODE_TYPES = Object.freeze([
+        "Skill", "Goal", "Habit", "Project", "Event", "Person",
+        "Organization", "Program", "Tool", "Technology", "Model",
+        "Hardware", "Topic", "Recipe", "Issue", "Place", "Resource"
+    ]);
+
+    var EDGE_TYPES = Object.freeze([
+        "uses", "runs_model", "current_model", "considering_model",
+        "compared_with", "for", "has_issue", "possible_cause", "at",
+        "referred_by", "focuses_on", "practices_on", "status", "deadline",
+        "requires", "supports", "conflicts_with", "motivated_by",
+        "leads_to", "part_of", "owned_by", "blocks", "related_to"
+    ]);
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -38,6 +52,25 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#039;");
+    }
+
+    /** Escape a string for safe insertion as an HTML attribute. */
+    function escapeAttr(str) {
+        return String(str == null ? "" : str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    function renderOptions(options, selected) {
+        var html = "";
+        options.forEach(function (option) {
+            var isSelected = option === selected ? " selected" : "";
+            html += '<option value="' + escapeAttr(option) + '"' + isSelected + '>' +
+                escapeHtml(option) + "</option>";
+        });
+        return html;
     }
 
     /** Returns the current node list (used by Graph_Editor for edge endpoints). */
@@ -316,24 +349,69 @@
             var edges = (proposal && proposal.edges) || [];
 
             var html = '<div class="app-proposal">';
-            html += "<p>Proposed: " + nodes.length + " node" + (nodes.length !== 1 ? "s" : "") +
-                ", " + edges.length + " edge" + (edges.length !== 1 ? "s" : "") + ".</p>";
-            if (nodes.length > 0) {
-                html += "<ul>";
-                nodes.forEach(function (n) {
-                    html += "<li>" + escapeHtml(n.label) + " <em>(" + escapeHtml(n.type) + ")</em></li>";
+            html += '<div class="app-proposal-summary">Proposed ' + nodes.length +
+                " node" + (nodes.length !== 1 ? "s" : "") + " and " + edges.length +
+                " edge" + (edges.length !== 1 ? "s" : "") + ".</div>";
+            html += '<div class="app-proposal-error" id="app-proposal-error"></div>';
+
+            html += '<div class="app-proposal-block"><h4>Nodes</h4>';
+            if (nodes.length === 0) {
+                html += '<p class="app-entities-empty">No nodes proposed.</p>';
+            } else {
+                html += '<div class="app-proposal-table app-proposal-node-table">';
+                html += '<div class="app-proposal-row app-proposal-head">' +
+                    '<span>Use</span><span>Label</span><span>Type</span><span>Attributes JSON</span></div>';
+                nodes.forEach(function (n, index) {
+                    html += '<div class="app-proposal-row" data-node-row="' + index + '">' +
+                        '<label class="app-proposal-use"><input type="checkbox" class="proposal-node-include" checked /></label>' +
+                        '<input class="proposal-node-label" value="' + escapeAttr(n.label) + '" />' +
+                        '<select class="proposal-node-type">' + renderOptions(NODE_TYPES, n.type) + '</select>' +
+                        '<textarea class="proposal-node-attrs" rows="1">' +
+                        escapeHtml(JSON.stringify(n.attributes || {})) + '</textarea>' +
+                        '</div>';
                 });
-                html += "</ul>";
+                html += '</div>';
             }
+            html += '</div>';
+
+            html += '<div class="app-proposal-block"><h4>Edges</h4>';
+            if (edges.length === 0) {
+                html += '<p class="app-entities-empty">No edges proposed.</p>';
+            } else {
+                html += '<div class="app-proposal-table app-proposal-edge-table">';
+                html += '<div class="app-proposal-row app-proposal-head">' +
+                    '<span>Use</span><span>Source</span><span>Source type</span><span>Edge</span><span>Target</span><span>Target type</span></div>';
+                edges.forEach(function (edge, index) {
+                    html += '<div class="app-proposal-row" data-edge-row="' + index + '">' +
+                        '<label class="app-proposal-use"><input type="checkbox" class="proposal-edge-include" checked /></label>' +
+                        '<input class="proposal-edge-source-label" value="' + escapeAttr(edge.source_label) + '" />' +
+                        '<select class="proposal-edge-source-type">' + renderOptions(NODE_TYPES, edge.source_type) + '</select>' +
+                        '<select class="proposal-edge-type">' + renderOptions(EDGE_TYPES, edge.type) + '</select>' +
+                        '<input class="proposal-edge-target-label" value="' + escapeAttr(edge.target_label) + '" />' +
+                        '<select class="proposal-edge-target-type">' + renderOptions(NODE_TYPES, edge.target_type) + '</select>' +
+                        '</div>';
+                });
+                html += '</div>';
+            }
+            html += '</div>';
+
             html += '<div class="form-actions">';
-            html += '<button type="button" class="btn-primary" id="app-proposal-confirm">Confirm</button>';
+            html += '<button type="button" class="btn-primary" id="app-proposal-confirm">Save Proposal</button>';
             html += '<button type="button" class="btn-secondary" id="app-proposal-reject">Reject</button>';
             html += "</div></div>";
             preview.innerHTML = html;
 
             preview.querySelector("#app-proposal-confirm").addEventListener("click", function () {
+                var editedProposal;
+                try {
+                    editedProposal = collectEditedProposal(preview);
+                } catch (err) {
+                    var errorEl = preview.querySelector("#app-proposal-error");
+                    if (errorEl) errorEl.textContent = err.message;
+                    return;
+                }
                 setStatus("Saving…");
-                confirmProposal(proposal)
+                confirmProposal(editedProposal)
                     .then(function () {
                         clearPreview();
                         input.value = "";
@@ -356,6 +434,69 @@
                         setStatus("Reject failed: " + err.message);
                     });
             });
+        }
+
+        function collectEditedProposal(container) {
+            var edited = { nodes: [], edges: [] };
+
+            container.querySelectorAll("[data-node-row]").forEach(function (row) {
+                if (!row.querySelector(".proposal-node-include").checked) return;
+                var label = row.querySelector(".proposal-node-label").value.trim();
+                var type = row.querySelector(".proposal-node-type").value;
+                var rawAttrs = row.querySelector(".proposal-node-attrs").value.trim();
+                var attrs = {};
+
+                if (!label) {
+                    throw new Error("Every included node needs a label.");
+                }
+                if (NODE_TYPES.indexOf(type) === -1) {
+                    throw new Error("Every included node needs a valid type.");
+                }
+                if (rawAttrs) {
+                    attrs = JSON.parse(rawAttrs);
+                    if (!attrs || Array.isArray(attrs) || typeof attrs !== "object") {
+                        throw new Error("Node attributes must be a JSON object.");
+                    }
+                }
+
+                edited.nodes.push({ label: label, type: type, attributes: attrs });
+            });
+
+            container.querySelectorAll("[data-edge-row]").forEach(function (row) {
+                if (!row.querySelector(".proposal-edge-include").checked) return;
+                var sourceLabel = row.querySelector(".proposal-edge-source-label").value.trim();
+                var sourceType = row.querySelector(".proposal-edge-source-type").value;
+                var targetLabel = row.querySelector(".proposal-edge-target-label").value.trim();
+                var targetType = row.querySelector(".proposal-edge-target-type").value;
+                var edgeType = row.querySelector(".proposal-edge-type").value;
+
+                if (!sourceLabel || !targetLabel) {
+                    throw new Error("Every included edge needs source and target labels.");
+                }
+                if (
+                    NODE_TYPES.indexOf(sourceType) === -1 ||
+                    NODE_TYPES.indexOf(targetType) === -1 ||
+                    EDGE_TYPES.indexOf(edgeType) === -1
+                ) {
+                    throw new Error("Every included edge needs valid source, target, and edge types.");
+                }
+                if (
+                    sourceLabel.toLowerCase() === targetLabel.toLowerCase() &&
+                    sourceType === targetType
+                ) {
+                    throw new Error("Self-referential edges are not permitted.");
+                }
+
+                edited.edges.push({
+                    source_label: sourceLabel,
+                    source_type: sourceType,
+                    target_label: targetLabel,
+                    target_type: targetType,
+                    type: edgeType,
+                });
+            });
+
+            return edited;
         }
     }
 

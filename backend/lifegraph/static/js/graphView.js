@@ -6,13 +6,23 @@
  * This mapping is injective — no two types share the same (color, shape) pair.
  */
 const NODE_TYPE_STYLES = {
-    Skill:    { color: { background: "#4CAF50", border: "#388E3C", highlight: { background: "#66BB6A", border: "#2E7D32" } }, shape: "dot" },
-    Goal:     { color: { background: "#FF9800", border: "#F57C00", highlight: { background: "#FFB74D", border: "#E65100" } }, shape: "star" },
-    Habit:    { color: { background: "#9C27B0", border: "#7B1FA2", highlight: { background: "#BA68C8", border: "#6A1B9A" } }, shape: "diamond" },
-    Project:  { color: { background: "#2196F3", border: "#1976D2", highlight: { background: "#64B5F6", border: "#1565C0" } }, shape: "square" },
-    Event:    { color: { background: "#F44336", border: "#D32F2F", highlight: { background: "#EF5350", border: "#C62828" } }, shape: "triangle" },
-    Person:   { color: { background: "#00BCD4", border: "#0097A7", highlight: { background: "#4DD0E1", border: "#00838F" } }, shape: "ellipse" },
-    Resource: { color: { background: "#795548", border: "#5D4037", highlight: { background: "#A1887F", border: "#4E342E" } }, shape: "box" },
+    Skill:        { color: { background: "#2E7D32", border: "#1B5E20", highlight: { background: "#66BB6A", border: "#1B5E20" } }, shape: "dot" },
+    Goal:         { color: { background: "#F57C00", border: "#E65100", highlight: { background: "#FFB74D", border: "#E65100" } }, shape: "star" },
+    Habit:        { color: { background: "#7B1FA2", border: "#4A148C", highlight: { background: "#BA68C8", border: "#4A148C" } }, shape: "diamond" },
+    Project:      { color: { background: "#1976D2", border: "#0D47A1", highlight: { background: "#64B5F6", border: "#0D47A1" } }, shape: "square" },
+    Event:        { color: { background: "#C62828", border: "#8E0000", highlight: { background: "#EF5350", border: "#8E0000" } }, shape: "triangle" },
+    Person:       { color: { background: "#00838F", border: "#005662", highlight: { background: "#4DD0E1", border: "#005662" } }, shape: "ellipse" },
+    Organization: { color: { background: "#455A64", border: "#263238", highlight: { background: "#90A4AE", border: "#263238" } }, shape: "database" },
+    Program:      { color: { background: "#6D4C41", border: "#3E2723", highlight: { background: "#A1887F", border: "#3E2723" } }, shape: "hexagon" },
+    Tool:         { color: { background: "#00796B", border: "#004D40", highlight: { background: "#4DB6AC", border: "#004D40" } }, shape: "box" },
+    Technology:   { color: { background: "#5E35B1", border: "#311B92", highlight: { background: "#9575CD", border: "#311B92" } }, shape: "box" },
+    Model:        { color: { background: "#AD1457", border: "#880E4F", highlight: { background: "#F06292", border: "#880E4F" } }, shape: "dot" },
+    Hardware:     { color: { background: "#546E7A", border: "#29434E", highlight: { background: "#B0BEC5", border: "#29434E" } }, shape: "box" },
+    Topic:        { color: { background: "#558B2F", border: "#33691E", highlight: { background: "#AED581", border: "#33691E" } }, shape: "ellipse" },
+    Recipe:       { color: { background: "#D84315", border: "#BF360C", highlight: { background: "#FF8A65", border: "#BF360C" } }, shape: "diamond" },
+    Issue:        { color: { background: "#B71C1C", border: "#7F0000", highlight: { background: "#E57373", border: "#7F0000" } }, shape: "triangleDown" },
+    Place:        { color: { background: "#0277BD", border: "#01579B", highlight: { background: "#4FC3F7", border: "#01579B" } }, shape: "triangle" },
+    Resource:     { color: { background: "#616161", border: "#424242", highlight: { background: "#BDBDBD", border: "#424242" } }, shape: "box" },
 };
 
 /**

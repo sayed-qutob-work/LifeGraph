@@ -32,6 +32,13 @@ from lifegraph.ollama_client import OllamaClient
 
 MAX_PROPOSED_NODES = 100
 MAX_PROPOSED_EDGES = 200
+IGNORED_LABELS = frozenset({
+    "i",
+    "me",
+    "my",
+    "myself",
+    "my project",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +126,10 @@ class InputParser:
         # --- Response validation into ProposedGraph (Req 3.2, 3.3, 3.4) ---
         return self._raw_to_proposed_graph(raw_response)
 
+    def proposal_from_raw(self, raw: Any) -> ProposedGraph:
+        """Validate raw proposal JSON into a ProposedGraph without calling Ollama."""
+        return self._raw_to_proposed_graph(raw)
+
     def _validate_input(self, sentence: str) -> None:
         """Validate sentence length and non-blank before Ollama contact.
 
@@ -196,6 +207,9 @@ class InputParser:
             if not isinstance(attributes, dict):
                 attributes = {}
 
+            if self._should_ignore_label(label):
+                continue
+
             # Ensure attributes are string->string
             clean_attrs = {
                 str(k): str(v)
@@ -244,6 +258,12 @@ class InputParser:
             target_type = NodeType(target_type_str)
             edge_type = EdgeType(edge_type_str)
 
+            if (
+                self._should_ignore_label(source_label)
+                or self._should_ignore_label(target_label)
+            ):
+                continue
+
             edges.append(ProposedEdge(
                 source_label=str(source_label),
                 source_type=source_type,
@@ -257,3 +277,7 @@ class InputParser:
         edges = edges[:MAX_PROPOSED_EDGES]
 
         return ProposedGraph(nodes=nodes, edges=edges)
+
+    def _should_ignore_label(self, label: Any) -> bool:
+        """Return true for speaker/self placeholders that should not be persisted."""
+        return str(label).strip().casefold() in IGNORED_LABELS

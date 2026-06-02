@@ -9,7 +9,9 @@
  * The fixed set of allowed node types for filter checkboxes.
  */
 var SEARCH_NODE_TYPES = Object.freeze([
-    "Skill", "Goal", "Habit", "Project", "Event", "Person", "Resource"
+    "Skill", "Goal", "Habit", "Project", "Event", "Person",
+    "Organization", "Program", "Tool", "Technology", "Model",
+    "Hardware", "Topic", "Recipe", "Issue", "Place", "Resource"
 ]);
 
 // ---------------------------------------------------------------------------

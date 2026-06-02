@@ -8,13 +8,18 @@
  * The fixed set of allowed node types (Node_Type_Set).
  */
 const NODE_TYPES = Object.freeze([
-    "Skill", "Goal", "Habit", "Project", "Event", "Person", "Resource"
+    "Skill", "Goal", "Habit", "Project", "Event", "Person",
+    "Organization", "Program", "Tool", "Technology", "Model",
+    "Hardware", "Topic", "Recipe", "Issue", "Place", "Resource"
 ]);
 
 /**
  * The fixed set of allowed edge types (Edge_Type_Set).
  */
 const EDGE_TYPES = Object.freeze([
+    "uses", "runs_model", "current_model", "considering_model",
+    "compared_with", "for", "has_issue", "possible_cause", "at",
+    "referred_by", "focuses_on", "practices_on", "status", "deadline",
     "requires", "supports", "conflicts_with", "motivated_by",
     "leads_to", "part_of", "owned_by", "blocks", "related_to"
 ]);

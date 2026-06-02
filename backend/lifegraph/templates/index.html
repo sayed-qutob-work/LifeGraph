@@ -7,13 +7,218 @@
     <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: system-ui, -apple-system, sans-serif; height: 100vh; display: flex; flex-direction: column; }
-        #header { padding: 0.75rem 1rem; background: #1a1a2e; color: #eee; }
-        #header h1 { font-size: 1.25rem; }
-        #main { flex: 1; display: flex; overflow: hidden; }
-        #graph-container { flex: 1; }
-        #sidebar { width: 300px; border-left: 1px solid #ddd; padding: 1rem; overflow-y: auto; }
-        .error-banner { background: #fee; color: #c00; padding: 0.5rem 1rem; text-align: center; }
+        body {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            color: #182026;
+            background: #f4f6f8;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        #header {
+            min-height: 52px;
+            padding: 0 18px;
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid #d8dee4;
+            background: #ffffff;
+        }
+        #header h1 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 0;
+        }
+        #main {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(380px, 430px);
+            overflow: hidden;
+        }
+        #graph-container {
+            min-width: 0;
+            background: #ffffff;
+        }
+        #sidebar {
+            min-width: 0;
+            border-left: 1px solid #d8dee4;
+            background: #fbfcfd;
+            padding: 14px;
+            overflow-y: auto;
+        }
+        .app-section {
+            padding: 14px 0;
+            border-bottom: 1px solid #e3e7eb;
+        }
+        .app-section:first-child { padding-top: 0; }
+        .app-section-title,
+        .search-filter-title,
+        .graph-editor-form h3,
+        .app-proposal h4,
+        .app-entities-heading {
+            margin-bottom: 8px;
+            font-size: 0.82rem;
+            line-height: 1.2;
+            font-weight: 700;
+            color: #34424d;
+        }
+        textarea,
+        input,
+        select {
+            width: 100%;
+            min-height: 34px;
+            border: 1px solid #c8d0d8;
+            border-radius: 6px;
+            padding: 7px 9px;
+            background: #ffffff;
+            color: #182026;
+            font: inherit;
+            font-size: 0.88rem;
+        }
+        textarea { resize: vertical; }
+        button {
+            min-height: 32px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font: inherit;
+            font-size: 0.86rem;
+            font-weight: 650;
+            cursor: pointer;
+        }
+        .btn-primary {
+            background: #1f6feb;
+            color: #ffffff;
+            border-color: #1f6feb;
+        }
+        .btn-secondary,
+        .app-entity-actions button {
+            background: #ffffff;
+            color: #34424d;
+            border-color: #c8d0d8;
+        }
+        .form-group,
+        .form-actions,
+        .app-editor-controls {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        .form-group {
+            flex-direction: column;
+            gap: 5px;
+        }
+        label {
+            font-size: 0.78rem;
+            font-weight: 650;
+            color: #52616d;
+        }
+        .form-error,
+        .app-proposal-error,
+        .app-parse-status,
+        .search-status {
+            margin-top: 8px;
+            min-height: 18px;
+            color: #b42318;
+            font-size: 0.82rem;
+        }
+        .app-proposal-summary,
+        .app-entities-empty {
+            color: #52616d;
+            font-size: 0.86rem;
+        }
+        .app-proposal-block { margin-top: 12px; }
+        .app-proposal-table {
+            display: grid;
+            gap: 6px;
+            overflow-x: auto;
+        }
+        .app-proposal-row {
+            display: grid;
+            gap: 6px;
+            align-items: center;
+            min-width: 680px;
+        }
+        .app-proposal-node-table .app-proposal-row {
+            grid-template-columns: 42px minmax(150px, 1.1fr) 130px minmax(160px, 1fr);
+        }
+        .app-proposal-edge-table .app-proposal-row {
+            grid-template-columns: 42px minmax(120px, 1fr) 120px 150px minmax(120px, 1fr) 120px;
+        }
+        .app-proposal-head {
+            color: #52616d;
+            font-size: 0.72rem;
+            font-weight: 750;
+            text-transform: uppercase;
+        }
+        .app-proposal-use {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .app-proposal-use input {
+            width: 18px;
+            min-height: 18px;
+        }
+        .app-entity-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            list-style: none;
+            margin: 8px 0 12px;
+        }
+        .app-entity {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 8px;
+            align-items: center;
+            padding: 7px 0;
+            border-bottom: 1px solid #eef1f4;
+        }
+        .app-entity-label {
+            min-width: 0;
+            overflow-wrap: anywhere;
+            font-size: 0.86rem;
+        }
+        .app-entity-actions {
+            display: flex;
+            gap: 5px;
+        }
+        .search-type-checkboxes {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 5px;
+        }
+        .search-type-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 500;
+        }
+        .search-type-checkbox input {
+            width: 16px;
+            min-height: 16px;
+        }
+        .error-banner {
+            background: #fff1f0;
+            color: #b42318;
+            padding: 0.65rem 1rem;
+            text-align: center;
+        }
+        @media (max-width: 900px) {
+            body { height: auto; min-height: 100vh; }
+            #main {
+                grid-template-columns: 1fr;
+                overflow: visible;
+            }
+            #graph-container {
+                min-height: 55vh;
+            }
+            #sidebar {
+                border-left: 0;
+                border-top: 1px solid #d8dee4;
+            }
+        }
     </style>
 </head>
 <body>

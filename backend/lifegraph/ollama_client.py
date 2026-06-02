@@ -96,12 +96,17 @@ def verify_loopback(host: str) -> None:
 # ---------------------------------------------------------------------------
 
 _PARSE_PROMPT_TEMPLATE = """\
-You are a structured data extraction assistant for a personal knowledge graph.
+You extract a small, precise personal knowledge graph from one sentence.
 
-Given the following sentence about someone's life, extract nodes and edges.
+Allowed node types:
+Skill, Goal, Habit, Project, Event, Person, Organization, Program, Tool,
+Technology, Model, Hardware, Topic, Recipe, Issue, Place, Resource
 
-Allowed node types: Skill, Goal, Habit, Project, Event, Person, Resource
-Allowed edge types: requires, supports, conflicts_with, motivated_by, leads_to, part_of, owned_by, blocks, related_to
+Allowed edge types:
+uses, runs_model, current_model, considering_model, compared_with, for,
+has_issue, possible_cause, at, referred_by, focuses_on, practices_on,
+status, deadline, requires, supports, conflicts_with, motivated_by,
+leads_to, part_of, owned_by, blocks, related_to
 
 Return a JSON object with this exact structure:
 {{
@@ -113,13 +118,67 @@ Return a JSON object with this exact structure:
   ]
 }}
 
-Rules:
-- Each node must have a "label" (string) and "type" (one of the allowed node types).
-- Each node may have an optional "attributes" object with string key-value pairs.
-- Each edge must reference source and target by their label and type.
-- Each edge must have a "type" from the allowed edge types.
+Extraction rules:
 - Return ONLY valid JSON, no extra text.
+- Do not create nodes for the speaker: "I", "me", "myself", "my", or "my project".
+- Prefer named, durable entities over generic placeholders like "research" unless it is the main topic.
+- Preserve exact model names and versions, for example "Llama 3.1 8B" and "Mistral 7B".
+- Use Tool for software tools/platforms like Ollama and Kira IDE.
+- Use Technology for frameworks/databases/libraries like Flask, SQLite, Vis.js, React, Firebase, and Sharp.
+- Use Model for AI models like Mistral 7B and Llama 3.1 8B.
+- Use Organization for universities, companies, and programs' host institutions.
+- Use Program for academic programs such as MESW.
+- Use Topic for concepts and study areas such as knowledge graphs and AI memory systems.
+- Use Recipe for named recipes and Issue for concrete problems or defects.
+- Prefer specific edge types. Use related_to only if no specific edge type fits.
+- Use attributes for compact facts such as status, dates, deployment, notes, and uncertainty.
 
+Edge guidance:
+- A project uses its stack: Project -> Technology/Tool with uses.
+- A tool running a model uses Tool -> Model with runs_model.
+- A project evaluating models uses current_model, considering_model, and compared_with.
+- A recipe made for someone uses Recipe -> Person with for.
+- Problems use subject -> Issue with has_issue and Issue -> cause with possible_cause.
+- Applications/program facts use at and referred_by.
+- Practice goals use focuses_on and practices_on.
+- Status words like completed, live, sold, or needs finishing can be attributes or status edges.
+
+Examples:
+Sentence: I'm building LifeGraph using Flask, SQLite, Vis.js, and Ollama with Mistral 7B running locally.
+{{
+  "nodes": [
+    {{"label": "LifeGraph", "type": "Project", "attributes": {{}}}},
+    {{"label": "Flask", "type": "Technology", "attributes": {{}}}},
+    {{"label": "SQLite", "type": "Technology", "attributes": {{}}}},
+    {{"label": "Vis.js", "type": "Technology", "attributes": {{}}}},
+    {{"label": "Ollama", "type": "Tool", "attributes": {{}}}},
+    {{"label": "Mistral 7B", "type": "Model", "attributes": {{"deployment": "local"}}}}
+  ],
+  "edges": [
+    {{"source_label": "LifeGraph", "source_type": "Project", "target_label": "Flask", "target_type": "Technology", "type": "uses"}},
+    {{"source_label": "LifeGraph", "source_type": "Project", "target_label": "SQLite", "target_type": "Technology", "type": "uses"}},
+    {{"source_label": "LifeGraph", "source_type": "Project", "target_label": "Vis.js", "target_type": "Technology", "type": "uses"}},
+    {{"source_label": "LifeGraph", "source_type": "Project", "target_label": "Ollama", "target_type": "Tool", "type": "uses"}},
+    {{"source_label": "Ollama", "source_type": "Tool", "target_label": "Mistral 7B", "target_type": "Model", "type": "runs_model"}}
+  ]
+}}
+
+Sentence: I need to finish the Red Velvet cookie recipe for Pharadolla — the last batch spread too much and I think the butter ratio was off.
+{{
+  "nodes": [
+    {{"label": "Red Velvet cookie recipe", "type": "Recipe", "attributes": {{"status": "needs finishing"}}}},
+    {{"label": "Pharadolla", "type": "Person", "attributes": {{}}}},
+    {{"label": "last batch spread too much", "type": "Issue", "attributes": {{}}}},
+    {{"label": "butter ratio", "type": "Resource", "attributes": {{"uncertain": "true"}}}}
+  ],
+  "edges": [
+    {{"source_label": "Red Velvet cookie recipe", "source_type": "Recipe", "target_label": "Pharadolla", "target_type": "Person", "type": "for"}},
+    {{"source_label": "Red Velvet cookie recipe", "source_type": "Recipe", "target_label": "last batch spread too much", "target_type": "Issue", "type": "has_issue"}},
+    {{"source_label": "last batch spread too much", "source_type": "Issue", "target_label": "butter ratio", "target_type": "Resource", "type": "possible_cause"}}
+  ]
+}}
+
+Now extract this sentence:
 Sentence: {sentence}
 """
 
