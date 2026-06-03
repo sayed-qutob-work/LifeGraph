@@ -38,6 +38,7 @@ IGNORED_LABELS = frozenset({
     "my",
     "myself",
     "my project",
+    "project",
 })
 
 
@@ -257,6 +258,20 @@ class InputParser:
             source_type = NodeType(source_type_str)
             target_type = NodeType(target_type_str)
             edge_type = EdgeType(edge_type_str)
+
+            # Normalize referral direction. Semantics: "X referred_by Y" means
+            # Y (a Person) referred X (the program/project). The LLM frequently
+            # emits this backwards (Person as source). When the source is a
+            # Person and the target is not, swap so the Person is always the
+            # referrer/target. This is a structural invariant, not an
+            # entity-specific rule.
+            if (
+                edge_type is EdgeType.REFERRED_BY
+                and source_type is NodeType.PERSON
+                and target_type is not NodeType.PERSON
+            ):
+                source_label, target_label = target_label, source_label
+                source_type, target_type = target_type, source_type
 
             if (
                 self._should_ignore_label(source_label)

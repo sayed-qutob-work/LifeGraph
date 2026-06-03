@@ -118,63 +118,91 @@ Return a JSON object with this exact structure:
   ]
 }}
 
+Node type guide (pick the most specific type that fits the meaning):
+- Person: a named individual.
+- Organization: a company, university, or institution.
+- Program: an academic or professional program — a degree, internship, or course of study. Never a piece of software, a website, or a game.
+- Project: something the speaker is building or has built.
+- Event: a dated or scheduled happening.
+- Skill: an ability or technique a person practices or learns.
+- Goal: an objective the speaker is explicitly pursuing.
+- Habit: a recurring routine.
+- Topic: a subject, concept, field of study, or a game.
+- Tool: a software application, IDE, or platform.
+- Technology: a framework, language, database, or library.
+- Model: an AI or machine-learning model ONLY. Never label anything that is not an AI model as Model.
+- Hardware: a physical computing component or machine — GPU, CPU, RAM, server, PC.
+- Resource: a non-hardware resource the speaker draws on — ingredients, budget, materials, data.
+- Recipe: a named cooking recipe.
+- Issue: a concrete problem or defect.
+- Place: a geographic location.
+
 Extraction rules:
 - Return ONLY valid JSON, no extra text.
-- Do not create nodes for the speaker: "I", "me", "myself", "my", or "my project".
-- Prefer named, durable entities over generic placeholders like "research" unless it is the main topic.
-- Preserve exact model names and versions, for example "Llama 3.1 8B" and "Mistral 7B".
-- Use Tool for software tools/platforms like Ollama and Kira IDE.
-- Use Technology for frameworks/databases/libraries like Flask, SQLite, Vis.js, React, Firebase, and Sharp.
-- Use Model for AI models like Mistral 7B and Llama 3.1 8B.
-- Use Organization for universities, companies, and programs' host institutions.
-- Use Program for academic programs such as MESW.
-- Use Topic for concepts and study areas such as knowledge graphs and AI memory systems.
-- Use Recipe for named recipes and Issue for concrete problems or defects.
-- Prefer specific edge types. Use related_to only if no specific edge type fits.
-- Use attributes for compact facts such as status, dates, deployment, notes, and uncertainty.
+- Never create a node for the speaker ("I", "me", "my", "myself") or for a bare "project".
+- Create a Goal node only when the sentence explicitly frames something as a goal or objective the speaker is pursuing — phrases like "my goal is", "one of my goals is", "I want to", "I'm trying to". Name the Goal after the objective itself (e.g. "finish the MVP tasks"). Do NOT invent a Goal for a sentence that merely states a fact.
+- Use the most specific full name that appears in the sentence (e.g. an "X site", not just "site").
+- Preserve exact names and versions exactly as written.
+- Put compact facts (status, dates, deployment, ownership, uncertainty) in attributes — do not turn them into separate nodes.
+- Prefer a specific edge type; use related_to only when nothing else fits.
 
-Edge guidance:
-- A project uses its stack: Project -> Technology/Tool with uses.
-- A tool running a model uses Tool -> Model with runs_model.
-- A project evaluating models uses current_model, considering_model, and compared_with.
-- A recipe made for someone uses Recipe -> Person with for.
-- Problems use subject -> Issue with has_issue and Issue -> cause with possible_cause.
-- Applications/program facts use at and referred_by.
-- Practice goals use focuses_on and practices_on.
-- Status words like completed, live, sold, or needs finishing can be attributes or status edges.
+Edge guide:
+- A project or effort uses its stack: Project -> Technology/Tool/Hardware with uses.
+- A tool that runs a model: Tool -> Model with runs_model.
+- Two models being weighed against each other: Model -> Model with compared_with.
+- A recipe made for someone: Recipe -> Person with for. Use "for" ONLY for this recipe-to-person case.
+- Problems: subject -> Issue with has_issue; Issue -> suspected cause with possible_cause.
+- Applying to a program at an institution: Program -> Organization with at.
+- A referral: the thing being referred is the SOURCE and the person giving the referral is the TARGET — Program -> Person with referred_by (the Person is always the referrer/target).
+- A goal: Goal -> the Skill/Topic it centers on with focuses_on; Goal -> the Program/Event that drives it with motivated_by.
+- Practising on something: Skill/Goal -> Hardware/Resource with practices_on.
 
-Examples:
-Sentence: I'm building LifeGraph using Flask, SQLite, Vis.js, and Ollama with Mistral 7B running locally.
+Examples (these are illustrations only — follow their structure, never copy their entities):
+
+Sentence: I'm writing a notes app in Django with Postgres, and I run Phi-3 locally through llama.cpp.
 {{
   "nodes": [
-    {{"label": "LifeGraph", "type": "Project", "attributes": {{}}}},
-    {{"label": "Flask", "type": "Technology", "attributes": {{}}}},
-    {{"label": "SQLite", "type": "Technology", "attributes": {{}}}},
-    {{"label": "Vis.js", "type": "Technology", "attributes": {{}}}},
-    {{"label": "Ollama", "type": "Tool", "attributes": {{}}}},
-    {{"label": "Mistral 7B", "type": "Model", "attributes": {{"deployment": "local"}}}}
+    {{"label": "notes app", "type": "Project", "attributes": {{}}}},
+    {{"label": "Django", "type": "Technology", "attributes": {{}}}},
+    {{"label": "Postgres", "type": "Technology", "attributes": {{}}}},
+    {{"label": "llama.cpp", "type": "Tool", "attributes": {{}}}},
+    {{"label": "Phi-3", "type": "Model", "attributes": {{"deployment": "local"}}}}
   ],
   "edges": [
-    {{"source_label": "LifeGraph", "source_type": "Project", "target_label": "Flask", "target_type": "Technology", "type": "uses"}},
-    {{"source_label": "LifeGraph", "source_type": "Project", "target_label": "SQLite", "target_type": "Technology", "type": "uses"}},
-    {{"source_label": "LifeGraph", "source_type": "Project", "target_label": "Vis.js", "target_type": "Technology", "type": "uses"}},
-    {{"source_label": "LifeGraph", "source_type": "Project", "target_label": "Ollama", "target_type": "Tool", "type": "uses"}},
-    {{"source_label": "Ollama", "source_type": "Tool", "target_label": "Mistral 7B", "target_type": "Model", "type": "runs_model"}}
+    {{"source_label": "notes app", "source_type": "Project", "target_label": "Django", "target_type": "Technology", "type": "uses"}},
+    {{"source_label": "notes app", "source_type": "Project", "target_label": "Postgres", "target_type": "Technology", "type": "uses"}},
+    {{"source_label": "notes app", "source_type": "Project", "target_label": "llama.cpp", "target_type": "Tool", "type": "uses"}},
+    {{"source_label": "llama.cpp", "source_type": "Tool", "target_label": "Phi-3", "target_type": "Model", "type": "runs_model"}}
   ]
 }}
 
-Sentence: I need to finish the Red Velvet cookie recipe for Pharadolla — the last batch spread too much and I think the butter ratio was off.
+Sentence: My goal is to sharpen my Rust skills before the Recurse Center batch that David referred me to.
 {{
   "nodes": [
-    {{"label": "Red Velvet cookie recipe", "type": "Recipe", "attributes": {{"status": "needs finishing"}}}},
-    {{"label": "Pharadolla", "type": "Person", "attributes": {{}}}},
-    {{"label": "last batch spread too much", "type": "Issue", "attributes": {{}}}},
-    {{"label": "butter ratio", "type": "Resource", "attributes": {{"uncertain": "true"}}}}
+    {{"label": "sharpen Rust skills", "type": "Goal", "attributes": {{}}}},
+    {{"label": "Rust", "type": "Skill", "attributes": {{}}}},
+    {{"label": "Recurse Center batch", "type": "Program", "attributes": {{}}}},
+    {{"label": "David", "type": "Person", "attributes": {{}}}}
   ],
   "edges": [
-    {{"source_label": "Red Velvet cookie recipe", "source_type": "Recipe", "target_label": "Pharadolla", "target_type": "Person", "type": "for"}},
-    {{"source_label": "Red Velvet cookie recipe", "source_type": "Recipe", "target_label": "last batch spread too much", "target_type": "Issue", "type": "has_issue"}},
-    {{"source_label": "last batch spread too much", "source_type": "Issue", "target_label": "butter ratio", "target_type": "Resource", "type": "possible_cause"}}
+    {{"source_label": "sharpen Rust skills", "source_type": "Goal", "target_label": "Rust", "target_type": "Skill", "type": "focuses_on"}},
+    {{"source_label": "sharpen Rust skills", "source_type": "Goal", "target_label": "Recurse Center batch", "target_type": "Program", "type": "motivated_by"}},
+    {{"source_label": "Recurse Center batch", "source_type": "Program", "target_label": "David", "target_type": "Person", "type": "referred_by"}}
+  ]
+}}
+
+Sentence: I still need to finish my sourdough recipe for my sister Lina — the last loaf came out too dense, maybe not enough water.
+{{
+  "nodes": [
+    {{"label": "sourdough recipe", "type": "Recipe", "attributes": {{"status": "needs finishing"}}}},
+    {{"label": "Lina", "type": "Person", "attributes": {{}}}},
+    {{"label": "last loaf came out too dense", "type": "Issue", "attributes": {{}}}},
+    {{"label": "water amount", "type": "Resource", "attributes": {{"uncertain": "true"}}}}
+  ],
+  "edges": [
+    {{"source_label": "sourdough recipe", "source_type": "Recipe", "target_label": "Lina", "target_type": "Person", "type": "for"}},
+    {{"source_label": "sourdough recipe", "source_type": "Recipe", "target_label": "last loaf came out too dense", "target_type": "Issue", "type": "has_issue"}},
+    {{"source_label": "last loaf came out too dense", "source_type": "Issue", "target_label": "water amount", "target_type": "Resource", "type": "possible_cause"}}
   ]
 }}
 
@@ -242,6 +270,16 @@ class OllamaClient:
             "prompt": prompt,
             "stream": False,
             "format": "json",
+            # Structured extraction must be deterministic. Ollama defaults to
+            # temperature 0.8, which makes type/edge choices flip between runs
+            # (the same sentence yielding "Skill" once and "Model" the next).
+            # temperature 0 removes that sampling noise; the larger num_ctx
+            # keeps the few-shot prompt from being truncated before the answer.
+            "options": {
+                "temperature": 0,
+                "num_ctx": 4096,
+                "num_predict": 1024,
+            },
         }
 
         try:
