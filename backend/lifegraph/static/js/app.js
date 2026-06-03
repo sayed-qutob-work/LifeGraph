@@ -22,6 +22,7 @@
         graph: { nodes: [], edges: [] }, // local cache for editor dropdowns / lists
         editor: null,
         search: null,
+        contextPanel: null,
         dashboardContainer: null,
         entitiesContainer: null,
     };
@@ -178,6 +179,12 @@
         editorForm.className = "app-editor-form";
         editorSection.appendChild(editorForm);
 
+        // --- Context snapshot (node selection → copy to clipboard) ---
+        var contextSection = section("Context");
+        var contextContainer = document.createElement("div");
+        contextContainer.id = "app-context";
+        contextSection.appendChild(contextContainer);
+
         // --- Natural-language parse ---
         var parseSection = section("Add from sentence");
         var parseForm = document.createElement("form");
@@ -215,6 +222,7 @@
             addNodeBtn: addNodeBtn,
             addEdgeBtn: addEdgeBtn,
             editorForm: editorForm,
+            contextContainer: contextContainer,
             parseForm: parseForm,
             searchContainer: searchContainer,
             entitiesContainer: entitiesContainer,
@@ -523,6 +531,16 @@
 
         // Populate the local cache used by the editor and entity list.
         await refreshGraphCache();
+
+        // 1a. Context_Panel — wired to graph node selection.
+        state.contextPanel = new ContextPanel({
+            container: refs.contextContainer,
+            getNode: findNode,
+        });
+        state.contextPanel.clear();
+        setSelectionCallback(function (nodeId) {
+            state.contextPanel.onNodeSelected(nodeId);
+        });
 
         // 2. Graph_Editor — every successful mutation routes through
         //    handleGraphChanged so the view re-renders (Req 7.5).

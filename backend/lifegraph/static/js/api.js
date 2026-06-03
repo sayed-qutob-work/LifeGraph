@@ -157,13 +157,31 @@ async function fetchDashboard() {
 /**
  * Get a context snapshot for a given node.
  * POST /api/context → { snapshot: string }
+ *
+ * @param {string} nodeId
+ * @param {number} [hops] - Optional hop depth override (1–5). Uses server default if omitted.
  */
-async function fetchContext(nodeId) {
+async function fetchContext(nodeId, hops) {
+    const body = { node_id: nodeId };
+    if (hops != null) {
+        body.max_hops = hops;
+    }
     return apiFetch("/api/context", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ node_id: nodeId }),
+        body: JSON.stringify(body),
     });
+}
+
+/**
+ * Fetch recently created or updated nodes.
+ * GET /api/recent?days=N → { nodes: [...] }
+ *
+ * @param {number} [days=7] - Look-back window in days.
+ */
+async function fetchRecent(days) {
+    const url = days != null ? `/api/recent?days=${days}` : "/api/recent";
+    return apiFetch(url);
 }
 
 /**

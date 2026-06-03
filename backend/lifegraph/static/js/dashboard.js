@@ -47,6 +47,13 @@ function renderDashboard(container, data) {
     const wrapper = document.createElement("div");
     wrapper.className = "dashboard";
 
+    // Recent nodes section (any type, most-recent first)
+    if ((data.recentNodes || []).length > 0) {
+        wrapper.appendChild(
+            renderSection("Recently Updated", data.recentNodes, renderRecentItem)
+        );
+    }
+
     // Skills section
     wrapper.appendChild(renderSection("Skills", data.skills || [], renderNodeItem));
 
@@ -62,6 +69,13 @@ function renderDashboard(container, data) {
     wrapper.appendChild(
         renderSection("Undated Events", data.undatedEvents || [], renderEventItem)
     );
+
+    // Past Events section — collapsible, hidden by default
+    if ((data.pastEvents || []).length > 0) {
+        wrapper.appendChild(
+            renderCollapsibleSection("Past Events", data.pastEvents, renderEventItem)
+        );
+    }
 
     container.appendChild(wrapper);
 }
@@ -140,6 +154,90 @@ function renderEventItem(node) {
     }
 
     return li;
+}
+
+/**
+ * Render a recently-updated node as an <li>, showing type and relative time.
+ *
+ * @param {object} node
+ * @returns {HTMLLIElement}
+ */
+function renderRecentItem(node) {
+    const li = document.createElement("li");
+    li.className = "dashboard-item dashboard-recent-item";
+    li.dataset.nodeId = node.id;
+
+    const labelSpan = document.createElement("span");
+    labelSpan.className = "dashboard-recent-label";
+    labelSpan.textContent = node.label;
+    li.appendChild(labelSpan);
+
+    const metaSpan = document.createElement("span");
+    metaSpan.className = "dashboard-recent-meta";
+    const ts = node.updated_at || node.created_at || "";
+    const origin = node.origin === "parsed" ? "parsed" : "manual";
+    metaSpan.textContent = node.type + (ts ? " · " + _relativeTime(ts) : "") + " · " + origin;
+    li.appendChild(metaSpan);
+
+    return li;
+}
+
+/**
+ * Render a collapsible section (hidden by default, toggle on heading click).
+ *
+ * @param {string} title
+ * @param {Array} items
+ * @param {function} renderItem
+ * @returns {HTMLElement}
+ */
+function renderCollapsibleSection(title, items, renderItem) {
+    const section = document.createElement("section");
+    section.className = "dashboard-section dashboard-section-collapsible";
+
+    const heading = document.createElement("h3");
+    heading.className = "dashboard-section-title dashboard-section-toggle";
+    heading.textContent = title + " (" + items.length + ")";
+    heading.setAttribute("role", "button");
+    heading.setAttribute("aria-expanded", "false");
+    section.appendChild(heading);
+
+    const body = document.createElement("div");
+    body.className = "dashboard-collapsible-body";
+    body.hidden = true;
+
+    const list = document.createElement("ul");
+    list.className = "dashboard-list";
+    for (const item of items) {
+        list.appendChild(renderItem(item));
+    }
+    body.appendChild(list);
+    section.appendChild(body);
+
+    heading.addEventListener("click", function () {
+        const expanded = !body.hidden;
+        body.hidden = expanded;
+        heading.setAttribute("aria-expanded", String(!expanded));
+    });
+
+    return section;
+}
+
+/**
+ * Format an ISO-8601 UTC timestamp as a human-readable relative string.
+ * @param {string} isoStr
+ * @returns {string}
+ */
+function _relativeTime(isoStr) {
+    if (!isoStr) return "";
+    try {
+        var diff = (Date.now() - new Date(isoStr).getTime()) / 1000;
+        if (diff < 60) return "just now";
+        if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+        if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+        return Math.floor(diff / 86400) + "d ago";
+    } catch (_) {
+        return "";
+    }
 }
 
 /**

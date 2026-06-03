@@ -132,15 +132,16 @@ class TestSerializeNode:
     """Tests for serialize_node."""
 
     def test_basic_node(self) -> None:
-        """A node serializes to {id, type, label, attributes}."""
+        """A node serializes to the expected fields."""
         node = Node(id="n1", type=NodeType.SKILL, label="Python", attributes={})
         result = serialize_node(node)
-        assert result == {
-            "id": "n1",
-            "type": "Skill",
-            "label": "Python",
-            "attributes": {},
-        }
+        assert result["id"] == "n1"
+        assert result["type"] == "Skill"
+        assert result["label"] == "Python"
+        assert result["attributes"] == {}
+        assert "created_at" in result
+        assert "updated_at" in result
+        assert "origin" in result
 
     def test_node_with_attributes(self) -> None:
         """Node attributes are included in serialization."""
@@ -151,12 +152,10 @@ class TestSerializeNode:
             attributes={"date": "2025-09-15", "location": "NYC"},
         )
         result = serialize_node(node)
-        assert result == {
-            "id": "n2",
-            "type": "Event",
-            "label": "Conference",
-            "attributes": {"date": "2025-09-15", "location": "NYC"},
-        }
+        assert result["id"] == "n2"
+        assert result["type"] == "Event"
+        assert result["label"] == "Conference"
+        assert result["attributes"] == {"date": "2025-09-15", "location": "NYC"}
 
     def test_all_node_types_serialize(self) -> None:
         """Every NodeType serializes to its string value."""
@@ -170,15 +169,16 @@ class TestSerializeEdge:
     """Tests for serialize_edge."""
 
     def test_basic_edge(self) -> None:
-        """An edge serializes to {id, source, target, type}."""
+        """An edge serializes to the expected fields."""
         edge = Edge(id="e1", source="n1", target="n2", type=EdgeType.SUPPORTS)
         result = serialize_edge(edge)
-        assert result == {
-            "id": "e1",
-            "source": "n1",
-            "target": "n2",
-            "type": "supports",
-        }
+        assert result["id"] == "e1"
+        assert result["source"] == "n1"
+        assert result["target"] == "n2"
+        assert result["type"] == "supports"
+        assert "created_at" in result
+        assert "updated_at" in result
+        assert "origin" in result
 
     def test_all_edge_types_serialize(self) -> None:
         """Every EdgeType serializes to its string value."""
@@ -427,12 +427,12 @@ class TestGetGraphRoute:
         assert len(data["edges"]) == 2
 
     def test_node_json_shape(self, app, client) -> None:
-        """Each node has id, type, label, attributes fields (Req 11.2)."""
+        """Each node has at minimum id, type, label, attributes fields (Req 11.2)."""
         _seed_store(app)
         resp = client.get("/api/graph")
         data = resp.get_json()
         node = next(n for n in data["nodes"] if n["id"] == "n1")
-        assert set(node.keys()) == {"id", "type", "label", "attributes"}
+        assert {"id", "type", "label", "attributes"}.issubset(node.keys())
         assert node["type"] == "Skill"
         assert node["label"] == "Python"
         assert node["attributes"] == {}
@@ -446,12 +446,12 @@ class TestGetGraphRoute:
         assert node["attributes"] == {"priority": "high"}
 
     def test_edge_json_shape(self, app, client) -> None:
-        """Each edge has id, source, target, type fields (Req 11.2)."""
+        """Each edge has at minimum id, source, target, type fields (Req 11.2)."""
         _seed_store(app)
         resp = client.get("/api/graph")
         data = resp.get_json()
         edge = next(e for e in data["edges"] if e["id"] == "e1")
-        assert set(edge.keys()) == {"id", "source", "target", "type"}
+        assert {"id", "source", "target", "type"}.issubset(edge.keys())
         assert edge["source"] == "n1"
         assert edge["target"] == "n2"
         assert edge["type"] == "supports"

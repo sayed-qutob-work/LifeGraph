@@ -9,7 +9,7 @@ Requirements: 12.1, 12.2, 12.3
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import List
 
 from lifegraph.domain import Graph, Node, NodeType
@@ -23,6 +23,8 @@ class DashboardData:
     goals: List[Node] = field(default_factory=list)
     upcoming_events: List[Node] = field(default_factory=list)
     undated_events: List[Node] = field(default_factory=list)
+    past_events: List[Node] = field(default_factory=list)
+    recent_nodes: List[Node] = field(default_factory=list)
 
 
 def _parse_event_date(node: Node) -> date | None:
@@ -40,25 +42,38 @@ def _parse_event_date(node: Node) -> date | None:
         return None
 
 
-def aggregate_dashboard(graph: Graph, today: date | None = None) -> DashboardData:
+def aggregate_dashboard(
+    graph: Graph,
+    today: date | None = None,
+    recent_cutoff: str | None = None,
+) -> DashboardData:
     """Aggregate dashboard data from the graph.
 
     Args:
         graph: The full graph snapshot containing all nodes and edges.
-        today: The reference date for determining upcoming events.
-               Defaults to date.today() if not provided. Injectable for testability.
+        today: Reference date for event classification. Defaults to date.today().
+        recent_cutoff: ISO-8601 UTC string; nodes with a timestamp >= this value
+            are included in recent_nodes. Defaults to 7 days ago. Pass an empty
+            string to skip the recent calculation.
 
     Returns:
-        DashboardData with skills, goals, upcoming_events (sorted ascending by date,
-        today included), and undated_events.
+        DashboardData with skills, goals, upcoming/undated/past events, and
+        recently touched nodes.
     """
     if today is None:
         today = date.today()
+
+    if recent_cutoff is None:
+        recent_cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=7)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     skills: List[Node] = []
     goals: List[Node] = []
     upcoming_events: List[Node] = []
     undated_events: List[Node] = []
+    past_events: List[Node] = []
+    recent_nodes: List[Node] = []
 
     for node in graph.nodes:
         if node.type == NodeType.SKILL:
@@ -68,19 +83,31 @@ def aggregate_dashboard(graph: Graph, today: date | None = None) -> DashboardDat
         elif node.type == NodeType.EVENT:
             event_date = _parse_event_date(node)
             if event_date is None:
-                # No date attribute or unparseable date -> undated group
                 undated_events.append(node)
             elif event_date >= today:
-                # Date is today or in the future -> upcoming
                 upcoming_events.append(node)
-            # else: past event, not shown on dashboard
+            else:
+                past_events.append(node)
 
-    # Sort upcoming events by date ascending
+        # Recent: any node with a non-empty timestamp within the window
+        if recent_cutoff:
+            ts = node.updated_at or node.created_at
+            if ts and ts >= recent_cutoff:
+                recent_nodes.append(node)
+
+    # Sort upcoming events ascending, past events descending (most recent first)
     upcoming_events.sort(key=lambda n: _parse_event_date(n))  # type: ignore[arg-type]
+    past_events.sort(key=lambda n: _parse_event_date(n), reverse=True)  # type: ignore[arg-type]
+    recent_nodes.sort(
+        key=lambda n: max(n.updated_at or "", n.created_at or ""),
+        reverse=True,
+    )
 
     return DashboardData(
         skills=skills,
         goals=goals,
         upcoming_events=upcoming_events,
         undated_events=undated_events,
+        past_events=past_events,
+        recent_nodes=recent_nodes,
     )

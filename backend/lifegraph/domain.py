@@ -108,6 +108,9 @@ class Node:
     type: NodeType
     label: str  # 1..200 chars stored
     attributes: Dict[str, str] = field(default_factory=dict)  # 0..50 entries
+    created_at: str = ""   # ISO-8601 UTC; empty for pre-migration rows
+    updated_at: str = ""   # ISO-8601 UTC; empty for pre-migration rows
+    origin: str = "manual" # "manual" | "parsed"
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,9 @@ class Edge:
     source: str  # Node.id (must exist, != target)
     target: str  # Node.id (must exist, != source)
     type: EdgeType
+    created_at: str = ""   # ISO-8601 UTC; empty for pre-migration rows
+    updated_at: str = ""   # ISO-8601 UTC; empty for pre-migration rows
+    origin: str = "manual" # "manual" | "parsed"
 
 
 @dataclass

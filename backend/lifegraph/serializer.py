@@ -165,7 +165,15 @@ class ContextSerializer:
         lines.append("Nodes:")
         for hop, nid in nodes:
             node = node_map[nid]
-            lines.append(f"  [{node.type.value}] {node.label} (hop {hop})")
+            if node.attributes:
+                attrs_str = ", ".join(
+                    f"{k}: {v}" for k, v in sorted(node.attributes.items())
+                )
+                lines.append(
+                    f"  [{node.type.value}] {node.label} (hop {hop}) — {attrs_str}"
+                )
+            else:
+                lines.append(f"  [{node.type.value}] {node.label} (hop {hop})")
         lines.append("")
         lines.append("Edges:")
         if edges:

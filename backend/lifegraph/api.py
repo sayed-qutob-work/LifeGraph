@@ -21,6 +21,7 @@ Requirements: 2.2, 7.1, 11.1, 11.2
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 from flask import Flask, jsonify, render_template, request
@@ -71,28 +72,28 @@ from lifegraph.validation import (
 
 
 def serialize_node(node: Node) -> Dict[str, Any]:
-    """Serialize a Node to a JSON-compatible dict.
-
-    Returns: {"id": ..., "type": ..., "label": ..., "attributes": {...}}
-    """
+    """Serialize a Node to a JSON-compatible dict."""
     return {
         "id": node.id,
         "type": node.type.value,
         "label": node.label,
         "attributes": node.attributes,
+        "created_at": node.created_at,
+        "updated_at": node.updated_at,
+        "origin": node.origin,
     }
 
 
 def serialize_edge(edge: Edge) -> Dict[str, Any]:
-    """Serialize an Edge to a JSON-compatible dict.
-
-    Returns: {"id": ..., "source": ..., "target": ..., "type": ...}
-    """
+    """Serialize an Edge to a JSON-compatible dict."""
     return {
         "id": edge.id,
         "source": edge.source,
         "target": edge.target,
         "type": edge.type.value,
+        "created_at": edge.created_at,
+        "updated_at": edge.updated_at,
+        "origin": edge.origin,
     }
 
 
@@ -479,8 +480,8 @@ def _register_routes(app: Flask) -> None:
         sentence = body.get("sentence", "")
         proposed = parser.parse(sentence)
 
-        # Store the pending proposal in app state for confirm/reject
-        app.config["PENDING_PROPOSAL"] = proposed
+        # Store proposal and original sentence together for confirm/capture
+        app.config["PENDING_PROPOSAL"] = {"proposal": proposed, "sentence": sentence}
 
         # Serialize the proposal for the client preview
         result = {
@@ -521,15 +522,33 @@ def _register_routes(app: Flask) -> None:
                 400,
             )
 
+        # Support the new dict format {"proposal": ..., "sentence": ...}
+        if isinstance(pending, dict):
+            pending_proposal = pending["proposal"]
+            pending_sentence = pending.get("sentence", "")
+        else:
+            pending_proposal = pending
+            pending_sentence = ""
+
         edited = request.get_json(silent=True) or {}
         proposal = (
             parser.proposal_from_raw(edited)
             if isinstance(edited, dict) and ("nodes" in edited or "edges" in edited)
-            else pending
+            else pending_proposal
         )
 
         result = store.apply_proposal(proposal)
         app.config["PENDING_PROPOSAL"] = None
+
+        # Record provenance; non-fatal so a capture failure never rolls back the graph.
+        try:
+            store.record_capture(
+                pending_sentence,
+                [n.id for n in result.nodes],
+                [e.id for e in result.edges],
+            )
+        except Exception:
+            pass
 
         return jsonify(serialize_graph(result)), 200
 
@@ -562,7 +581,31 @@ def _register_routes(app: Flask) -> None:
             "goals": [serialize_node(n) for n in data.goals],
             "upcomingEvents": [serialize_node(n) for n in data.upcoming_events],
             "undatedEvents": [serialize_node(n) for n in data.undated_events],
+            "pastEvents": [serialize_node(n) for n in data.past_events],
+            "recentNodes": [serialize_node(n) for n in data.recent_nodes],
         }), 200
+
+    @app.route("/api/recent", methods=["GET"])
+    def get_recent():
+        """Fetch recently created or updated nodes.
+
+        Query params:
+            days - Look-back window in days (default 7, max 365).
+
+        Returns: 200 with {"nodes": [...]} ordered most-recent first.
+        """
+        store: GraphStore = app.config["STORE"]
+        try:
+            days = max(1, min(365, int(request.args.get("days", 7))))
+        except (ValueError, TypeError):
+            days = 7
+
+        since = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        nodes = store.recent_nodes(since)
+        return jsonify({"nodes": [serialize_node(n) for n in nodes]}), 200
 
     @app.route("/api/context", methods=["POST"])
     def get_context():
@@ -584,9 +627,17 @@ def _register_routes(app: Flask) -> None:
 
         graph = store.get_graph()
 
-        # Use configured hop distance or default
+        # Use configured hop distance or default; allow per-request override
         config = app.config.get("LIFEGRAPH_CONFIG")
-        max_hops = config.hop_distance if config else 2
+        default_hops = config.hop_distance if config else 2
+        body_hops = body.get("max_hops")
+        if body_hops is not None:
+            try:
+                max_hops = max(1, min(5, int(body_hops)))
+            except (ValueError, TypeError):
+                max_hops = default_hops
+        else:
+            max_hops = default_hops
 
         serializer = ContextSerializer(max_hops=max_hops)
         try:

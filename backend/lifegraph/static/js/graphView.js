@@ -81,6 +81,7 @@ let _edgesDataSet = null;
 let _container = null;
 let _selectedNodeId = null;
 let _graphData = null; // last fetched raw graph data
+let _selectionCallback = null; // registered by app.js to drive the context panel
 
 /**
  * Initialize the Graph_View: create the Vis.js network in the given container,
@@ -195,6 +196,16 @@ function getSelectedNodeId() {
     return _selectedNodeId;
 }
 
+/**
+ * Register a callback invoked whenever node selection changes.
+ * Called with the selected node ID (string) or null on deselect.
+ *
+ * @param {function(string|null): void} fn
+ */
+function setSelectionCallback(fn) {
+    _selectionCallback = fn;
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -226,13 +237,11 @@ function _renderNetwork(graphData) {
 
     _network = new vis.Network(_container, { nodes: _nodesDataSet, edges: _edgesDataSet }, options);
 
-    // Wire up click-to-select
+    // Wire up click-to-select; notify context panel via registered callback
     _network.on("click", function (params) {
-        if (params.nodes && params.nodes.length > 0) {
-            selectNode(params.nodes[0]);
-        } else {
-            selectNode(null);
-        }
+        var selectedId = (params.nodes && params.nodes.length > 0) ? params.nodes[0] : null;
+        selectNode(selectedId);
+        if (_selectionCallback) _selectionCallback(selectedId);
     });
 }
 
@@ -318,5 +327,5 @@ function _clearError() {
 
 // Module exports for testing (Node.js / Vitest environment)
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = { transformGraphData, getNodeTypeStyle, NODE_TYPE_STYLES };
+    module.exports = { transformGraphData, getNodeTypeStyle, NODE_TYPE_STYLES, setSelectionCallback };
 }

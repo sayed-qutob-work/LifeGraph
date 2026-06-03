@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -92,6 +93,11 @@ def uuid4_str() -> str:
     return str(uuid.uuid4())
 
 
+def _utcnow() -> str:
+    """Return the current UTC time as a sortable ISO-8601 string."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 # ---------------------------------------------------------------------------
 # Schema SQL
 # ---------------------------------------------------------------------------
@@ -106,17 +112,33 @@ CREATE TABLE IF NOT EXISTS nodes (
     label            TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 200),
     normalized_label TEXT NOT NULL,
     attributes       TEXT NOT NULL DEFAULT '{{}}',
+    created_at       TEXT NOT NULL DEFAULT '',
+    updated_at       TEXT NOT NULL DEFAULT '',
+    origin           TEXT NOT NULL DEFAULT 'manual',
     UNIQUE (normalized_label, type)
 )
 """
 
 _CREATE_EDGES_SQL = f"""\
 CREATE TABLE IF NOT EXISTS edges (
-    id        TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    target_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-    type      TEXT NOT NULL CHECK (type IN ({_EDGE_TYPE_CHECK})),
+    id         TEXT PRIMARY KEY,
+    source_id  TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    target_id  TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+    type       TEXT NOT NULL CHECK (type IN ({_EDGE_TYPE_CHECK})),
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT '',
+    origin     TEXT NOT NULL DEFAULT 'manual',
     CHECK (source_id <> target_id)
+)
+"""
+
+_CREATE_CAPTURES_SQL = """\
+CREATE TABLE IF NOT EXISTS captures (
+    id          TEXT PRIMARY KEY,
+    sentence    TEXT NOT NULL,
+    captured_at TEXT NOT NULL,
+    node_ids    TEXT NOT NULL DEFAULT '[]',
+    edge_ids    TEXT NOT NULL DEFAULT '[]'
 )
 """
 
@@ -131,8 +153,100 @@ PRAGMA foreign_keys = ON;
 
 {_CREATE_NODES_SQL};
 {_CREATE_EDGES_SQL};
+{_CREATE_CAPTURES_SQL};
 {_INDEX_SQL}
 """
+
+
+# ---------------------------------------------------------------------------
+# Schema versioning and migrations
+# ---------------------------------------------------------------------------
+
+SCHEMA_VERSION = 3  # Increment when a new migration is appended to _MIGRATIONS.
+
+
+def _table_allows_values(
+    conn: sqlite3.Connection, table_name: str, values: frozenset[str]
+) -> bool:
+    """Return True when a table's CREATE SQL mentions every enum value."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    if row is None or not row["sql"]:
+        return False
+    return all(f"'{v}'" in row["sql"] for v in values)
+
+
+def _migrate_0_rebuild_check_constraints(conn: sqlite3.Connection) -> None:
+    """Rebuild nodes/edges tables when CHECK constraints are out of date."""
+    if (
+        _table_allows_values(conn, "nodes", NODE_TYPE_VALUES)
+        and _table_allows_values(conn, "edges", EDGE_TYPE_VALUES)
+    ):
+        return  # Already current; no rebuild needed.
+
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DROP INDEX IF EXISTS idx_nodes_type")
+        conn.execute("DROP INDEX IF EXISTS idx_edges_source")
+        conn.execute("DROP INDEX IF EXISTS idx_edges_target")
+
+        conn.execute("ALTER TABLE edges RENAME TO edges_old")
+        conn.execute("ALTER TABLE nodes RENAME TO nodes_old")
+
+        conn.execute(_CREATE_NODES_SQL)
+        conn.execute(_CREATE_EDGES_SQL)
+
+        # Copy columns present in the old schema; new columns receive DEFAULTs.
+        conn.execute(
+            "INSERT INTO nodes (id, type, label, normalized_label, attributes) "
+            "SELECT id, type, label, normalized_label, attributes FROM nodes_old"
+        )
+        conn.execute(
+            "INSERT INTO edges (id, source_id, target_id, type) "
+            "SELECT id, source_id, target_id, type FROM edges_old"
+        )
+
+        conn.execute("DROP TABLE edges_old")
+        conn.execute("DROP TABLE nodes_old")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    conn.executescript(_INDEX_SQL)
+
+
+def _migrate_1_add_timestamps(conn: sqlite3.Connection) -> None:
+    """Add created_at, updated_at, origin columns to nodes and edges."""
+    for table in ("nodes", "edges"):
+        existing = {
+            row[1]
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for col, typedef in [
+            ("created_at", "TEXT NOT NULL DEFAULT ''"),
+            ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+            ("origin",     "TEXT NOT NULL DEFAULT 'manual'"),
+        ]:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}")
+
+
+def _migrate_2_add_captures(conn: sqlite3.Connection) -> None:
+    """Create the captures table for provenance tracking."""
+    conn.execute(_CREATE_CAPTURES_SQL)
+
+
+_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
+    _migrate_0_rebuild_check_constraints,
+    _migrate_1_add_timestamps,
+    _migrate_2_add_captures,
+]
 
 
 # ---------------------------------------------------------------------------
@@ -190,12 +304,13 @@ class GraphStore:
         self._conn.execute("PRAGMA foreign_keys = ON")
 
         if not file_exists:
-            # Fresh database — apply full schema
+            # Fresh database — apply full schema and stamp the version.
             self._conn.executescript(_SCHEMA_SQL)
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         else:
-            # Existing database — verify tables are present
+            # Existing database — verify tables are present, then migrate.
             self._verify_tables()
-            self._migrate_schema_if_needed()
+            self._run_migrations()
 
     def _validate_existing_db(self, path: Path) -> None:
         """Check that an existing file is a valid SQLite database.
@@ -232,61 +347,14 @@ class GraphStore:
                 path=self._db_path,
             )
 
-    def _migrate_schema_if_needed(self) -> None:
-        """Rebuild tables when existing CHECK constraints lack current enum values."""
-        assert self._conn is not None
-        conn = self._conn
-
-        if (
-            self._table_allows_values("nodes", NODE_TYPE_VALUES)
-            and self._table_allows_values("edges", EDGE_TYPE_VALUES)
-        ):
-            return
-
-        conn.execute("PRAGMA foreign_keys = OFF")
-        conn.execute("BEGIN")
-        try:
-            conn.execute("DROP INDEX IF EXISTS idx_nodes_type")
-            conn.execute("DROP INDEX IF EXISTS idx_edges_source")
-            conn.execute("DROP INDEX IF EXISTS idx_edges_target")
-
-            conn.execute("ALTER TABLE edges RENAME TO edges_old")
-            conn.execute("ALTER TABLE nodes RENAME TO nodes_old")
-
-            conn.execute(_CREATE_NODES_SQL)
-            conn.execute(_CREATE_EDGES_SQL)
-
-            conn.execute(
-                "INSERT INTO nodes (id, type, label, normalized_label, attributes) "
-                "SELECT id, type, label, normalized_label, attributes FROM nodes_old"
-            )
-            conn.execute(
-                "INSERT INTO edges (id, source_id, target_id, type) "
-                "SELECT id, source_id, target_id, type FROM edges_old"
-            )
-
-            conn.execute("DROP TABLE edges_old")
-            conn.execute("DROP TABLE nodes_old")
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
-        finally:
-            conn.execute("PRAGMA foreign_keys = ON")
-
-        conn.executescript(_INDEX_SQL)
-
-    def _table_allows_values(self, table_name: str, values: frozenset[str]) -> bool:
-        """Return true when a table's CREATE SQL mentions every enum value."""
-        assert self._conn is not None
-        row = self._conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table_name,),
-        ).fetchone()
-        if row is None or not row["sql"]:
-            return False
-        create_sql = row["sql"]
-        return all(f"'{value}'" in create_sql for value in values)
+    def _run_migrations(self) -> None:
+        """Run any pending migrations against an existing database."""
+        conn = self._connection
+        current = conn.execute("PRAGMA user_version").fetchone()[0]
+        for idx, fn in enumerate(_MIGRATIONS):
+            if idx >= current:
+                fn(conn)
+                conn.execute(f"PRAGMA user_version = {idx + 1}")
 
     # ------------------------------------------------------------------
     # Connection helpers
@@ -318,6 +386,9 @@ class GraphStore:
             type=NodeType(row["type"]),
             label=row["label"],
             attributes=attributes,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            origin=row["origin"],
         )
 
     @staticmethod
@@ -328,6 +399,9 @@ class GraphStore:
             source=row["source_id"],
             target=row["target_id"],
             type=EdgeType(row["type"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            origin=row["origin"],
         )
 
     # ------------------------------------------------------------------
@@ -511,13 +585,16 @@ class GraphStore:
 
         node_id = self._id_factory()
         attrs_json = json.dumps(attributes)
+        now = _utcnow()
 
         conn.execute("BEGIN")
         try:
             conn.execute(
-                "INSERT INTO nodes (id, type, label, normalized_label, attributes) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (node_id, type.value, label, normalized_label, attrs_json),
+                "INSERT INTO nodes "
+                "(id, type, label, normalized_label, attributes, created_at, updated_at, origin) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (node_id, type.value, label, normalized_label, attrs_json,
+                 now, now, "manual"),
             )
             conn.execute("COMMIT")
         except Exception:
@@ -529,6 +606,9 @@ class GraphStore:
             type=type,
             label=label,
             attributes=attributes,
+            created_at=now,
+            updated_at=now,
+            origin="manual",
         )
 
     def update_node(
@@ -604,13 +684,15 @@ class GraphStore:
 
         new_normalized = normalize(new_label)
         attrs_json = json.dumps(new_attributes)
+        now = _utcnow()
 
         conn.execute("BEGIN")
         try:
             conn.execute(
-                "UPDATE nodes SET type = ?, label = ?, normalized_label = ?, attributes = ? "
+                "UPDATE nodes "
+                "SET type = ?, label = ?, normalized_label = ?, attributes = ?, updated_at = ? "
                 "WHERE id = ?",
-                (new_type.value, new_label, new_normalized, attrs_json, node_id),
+                (new_type.value, new_label, new_normalized, attrs_json, now, node_id),
             )
             conn.execute("COMMIT")
         except Exception:
@@ -622,6 +704,9 @@ class GraphStore:
             type=new_type,
             label=new_label,
             attributes=new_attributes,
+            created_at=current_node.created_at,
+            updated_at=now,
+            origin=current_node.origin,
         )
 
     # ------------------------------------------------------------------
@@ -680,12 +765,15 @@ class GraphStore:
             raise ReferentialIntegrityError(target_id)
 
         edge_id = self._id_factory()
+        now = _utcnow()
 
         conn.execute("BEGIN")
         try:
             conn.execute(
-                "INSERT INTO edges (id, source_id, target_id, type) VALUES (?, ?, ?, ?)",
-                (edge_id, source_id, target_id, type.value),
+                "INSERT INTO edges "
+                "(id, source_id, target_id, type, created_at, updated_at, origin) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (edge_id, source_id, target_id, type.value, now, now, "manual"),
             )
             conn.execute("COMMIT")
         except Exception:
@@ -697,6 +785,9 @@ class GraphStore:
             source=source_id,
             target=target_id,
             type=type,
+            created_at=now,
+            updated_at=now,
+            origin="manual",
         )
 
     def update_edge(self, edge_id: str, type: EdgeType) -> Edge:
@@ -730,11 +821,13 @@ class GraphStore:
         if row is None:
             raise EdgeNotFoundError(edge_id)
 
+        now = _utcnow()
+
         conn.execute("BEGIN")
         try:
             conn.execute(
-                "UPDATE edges SET type = ? WHERE id = ?",
-                (type.value, edge_id),
+                "UPDATE edges SET type = ?, updated_at = ? WHERE id = ?",
+                (type.value, now, edge_id),
             )
             conn.execute("COMMIT")
         except Exception:
@@ -746,6 +839,9 @@ class GraphStore:
             source=row["source_id"],
             target=row["target_id"],
             type=type,
+            created_at=row["created_at"],
+            updated_at=now,
+            origin=row["origin"],
         )
 
     def delete_node(self, node_id: str) -> list[str]:
@@ -863,6 +959,8 @@ class GraphStore:
         result_nodes: list[Node] = []
         result_edges: list[Edge] = []
 
+        now = _utcnow()
+
         conn.execute("BEGIN")
         try:
             # Phase 1: Resolve or create all proposed nodes
@@ -872,6 +970,7 @@ class GraphStore:
                     proposed_node.label,
                     proposed_node.type,
                     proposed_node.attributes,
+                    origin="parsed",
                 )
                 result_nodes.append(node)
 
@@ -893,8 +992,11 @@ class GraphStore:
 
                 edge_id = self._id_factory()
                 conn.execute(
-                    "INSERT INTO edges (id, source_id, target_id, type) VALUES (?, ?, ?, ?)",
-                    (edge_id, source_node.id, target_node.id, proposed_edge.type.value),
+                    "INSERT INTO edges "
+                    "(id, source_id, target_id, type, created_at, updated_at, origin) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (edge_id, source_node.id, target_node.id,
+                     proposed_edge.type.value, now, now, "parsed"),
                 )
                 result_edges.append(
                     Edge(
@@ -902,6 +1004,9 @@ class GraphStore:
                         source=source_node.id,
                         target=target_node.id,
                         type=proposed_edge.type,
+                        created_at=now,
+                        updated_at=now,
+                        origin="parsed",
                     )
                 )
 
@@ -924,11 +1029,12 @@ class GraphStore:
         label: str,
         type: NodeType,
         attributes: dict[str, str],
+        origin: str = "manual",
     ) -> Node:
         """Upsert a node within an existing transaction (no BEGIN/COMMIT).
 
         If a node with the same (normalized_label, type) exists, reuse it.
-        Otherwise validate and create a new node.
+        Otherwise validate and create a new node with the given origin.
         """
         normalized_label = normalize(label)
         existing_row = conn.execute(
@@ -949,11 +1055,14 @@ class GraphStore:
 
         node_id = self._id_factory()
         attrs_json = json.dumps(attributes)
+        now = _utcnow()
 
         conn.execute(
-            "INSERT INTO nodes (id, type, label, normalized_label, attributes) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (node_id, type.value, label, normalized_label, attrs_json),
+            "INSERT INTO nodes "
+            "(id, type, label, normalized_label, attributes, created_at, updated_at, origin) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (node_id, type.value, label, normalized_label, attrs_json,
+             now, now, origin),
         )
 
         return Node(
@@ -961,6 +1070,9 @@ class GraphStore:
             type=type,
             label=label,
             attributes=attributes,
+            created_at=now,
+            updated_at=now,
+            origin=origin,
         )
 
     def _resolve_or_create_endpoint(
@@ -972,6 +1084,51 @@ class GraphStore:
         """Resolve an edge endpoint by (label, type) identity within a transaction.
 
         If a node with the same identity exists, return it. Otherwise create
-        it with empty attributes (Req 4.4).
+        it with empty attributes and origin='parsed' (Req 4.4).
         """
-        return self._upsert_node_in_txn(conn, label, type, {})
+        return self._upsert_node_in_txn(conn, label, type, {}, origin="parsed")
+
+    # ------------------------------------------------------------------
+    # Capture provenance (Req 1.2)
+    # ------------------------------------------------------------------
+
+    def record_capture(
+        self,
+        sentence: str,
+        node_ids: list[str],
+        edge_ids: list[str],
+    ) -> None:
+        """Record a parsed sentence alongside the ids it created or resolved."""
+        conn = self._connection
+        capture_id = self._id_factory()
+        now = _utcnow()
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                "INSERT INTO captures (id, sentence, captured_at, node_ids, edge_ids) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (capture_id, sentence, now,
+                 json.dumps(node_ids), json.dumps(edge_ids)),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    def recent_nodes(self, since: str) -> list[Node]:
+        """Return nodes whose created_at or updated_at is >= *since* (ISO-8601).
+
+        Pre-migration rows have empty timestamp strings and are never returned.
+        Results are ordered most-recent first.
+        """
+        conn = self._connection
+        rows = conn.execute(
+            "SELECT * FROM nodes "
+            "WHERE (created_at >= ? AND created_at != '') "
+            "   OR (updated_at >= ? AND updated_at != '') "
+            "ORDER BY CASE "
+            "  WHEN updated_at > created_at THEN updated_at "
+            "  ELSE created_at END DESC",
+            (since, since),
+        ).fetchall()
+        return [self._row_to_node(r) for r in rows]

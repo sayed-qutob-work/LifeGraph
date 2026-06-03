@@ -208,6 +208,56 @@
             padding: 0.65rem 1rem;
             text-align: center;
         }
+        /* Dashboard additions */
+        .dashboard-recent-item { flex-direction: column; align-items: flex-start; gap: 2px; }
+        .dashboard-recent-label { font-size: 0.86rem; font-weight: 600; }
+        .dashboard-recent-meta { font-size: 0.74rem; color: #7a8895; }
+        .dashboard-section-toggle { cursor: pointer; user-select: none; }
+        .dashboard-section-toggle::before { content: "▶ "; font-size: 0.7rem; }
+        .dashboard-section-toggle[aria-expanded="true"]::before { content: "▼ "; }
+        .dashboard-collapsible-body { margin-top: 4px; }
+        /* Context panel */
+        .context-panel-hint {
+            color: #7a8895;
+            font-size: 0.82rem;
+            font-style: italic;
+        }
+        .context-panel-header {
+            margin-bottom: 8px;
+            font-size: 0.88rem;
+        }
+        .context-panel-node-label { font-weight: 700; }
+        .context-panel-node-type { color: #52616d; }
+        .context-panel-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+        .context-hops-label {
+            font-size: 0.78rem;
+            font-weight: 650;
+            color: #52616d;
+            white-space: nowrap;
+        }
+        .context-hops-select {
+            width: 60px;
+            min-height: 32px;
+            padding: 5px 6px;
+        }
+        .context-status {
+            min-height: 16px;
+            font-size: 0.82rem;
+            color: #52616d;
+            margin-bottom: 4px;
+        }
+        .context-snapshot {
+            font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
+            font-size: 0.78rem;
+            line-height: 1.5;
+            resize: vertical;
+            background: #f6f8fa;
+        }
         @media (max-width: 900px) {
             body { height: auto; min-height: 100vh; }
             #main {
@@ -237,6 +287,7 @@
     <script src="{{ url_for('static', filename='js/graphEditor.js') }}"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
     <script src="{{ url_for('static', filename='js/search.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/contextPanel.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>
