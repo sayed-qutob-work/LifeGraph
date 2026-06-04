@@ -329,6 +329,7 @@
         var input = parseForm.querySelector("#app-parse-input");
         var status = parseForm.querySelector("#app-parse-status");
         var preview = parseForm.querySelector("#app-parse-preview");
+        var currentToken = null;
 
         function setStatus(msg) { status.textContent = msg || ""; }
         function clearPreview() { preview.innerHTML = ""; }
@@ -344,6 +345,7 @@
             setStatus("Parsing…");
             parseSentence(sentence)
                 .then(function (proposal) {
+                    currentToken = proposal.proposal_token || null;
                     setStatus("");
                     showProposalPreview(proposal);
                 })
@@ -419,8 +421,9 @@
                     return;
                 }
                 setStatus("Saving…");
-                confirmProposal(editedProposal)
+                confirmProposal(editedProposal, currentToken)
                     .then(function () {
+                        currentToken = null;
                         clearPreview();
                         input.value = "";
                         setStatus("Added to graph.");
@@ -433,8 +436,9 @@
             });
 
             preview.querySelector("#app-proposal-reject").addEventListener("click", function () {
-                rejectProposal()
+                rejectProposal(currentToken)
                     .then(function () {
+                        currentToken = null;
                         clearPreview();
                         setStatus("Proposal discarded.");
                     })

@@ -21,6 +21,7 @@ Requirements: 2.2, 7.1, 11.1, 11.2
 
 from __future__ import annotations
 
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
@@ -188,8 +189,8 @@ def create_app(config: Dict[str, Any] | None = None) -> Flask:
         parser = InputParser(ollama)
     app.config["PARSER"] = parser
 
-    # No pending proposal initially
-    app.config["PENDING_PROPOSAL"] = None
+    # Pending proposals: maps proposal_token (str UUID) → {proposal, sentence}
+    app.config["PENDING_PROPOSALS"] = {}
 
     # Register error handlers
     _register_error_handlers(app)
@@ -480,11 +481,16 @@ def _register_routes(app: Flask) -> None:
         sentence = body.get("sentence", "")
         proposed = parser.parse(sentence)
 
-        # Store proposal and original sentence together for confirm/capture
-        app.config["PENDING_PROPOSAL"] = {"proposal": proposed, "sentence": sentence}
+        # Issue a per-request token so concurrent browser sessions don't collide.
+        proposals = app.config["PENDING_PROPOSALS"]
+        if len(proposals) >= 50:
+            proposals.clear()
+        token = str(_uuid.uuid4())
+        proposals[token] = {"proposal": proposed, "sentence": sentence}
 
         # Serialize the proposal for the client preview
         result = {
+            "proposal_token": token,
             "nodes": [
                 {"label": n.label, "type": n.type.value, "attributes": n.attributes}
                 for n in proposed.nodes
@@ -514,7 +520,12 @@ def _register_routes(app: Flask) -> None:
         """
         store: GraphStore = app.config["STORE"]
         parser: InputParser = app.config["PARSER"]
-        pending = app.config.get("PENDING_PROPOSAL")
+
+        body = request.get_json(silent=True) or {}
+        token = body.get("proposal_token", "")
+
+        proposals = app.config.get("PENDING_PROPOSALS", {})
+        pending = proposals.pop(token, None)
 
         if pending is None:
             return (
@@ -522,23 +533,18 @@ def _register_routes(app: Flask) -> None:
                 400,
             )
 
-        # Support the new dict format {"proposal": ..., "sentence": ...}
-        if isinstance(pending, dict):
-            pending_proposal = pending["proposal"]
-            pending_sentence = pending.get("sentence", "")
-        else:
-            pending_proposal = pending
-            pending_sentence = ""
+        pending_proposal = pending["proposal"]
+        pending_sentence = pending.get("sentence", "")
 
-        edited = request.get_json(silent=True) or {}
+        # Build the edited proposal from the body, excluding the token key.
+        edited = {k: v for k, v in body.items() if k != "proposal_token"}
         proposal = (
             parser.proposal_from_raw(edited)
-            if isinstance(edited, dict) and ("nodes" in edited or "edges" in edited)
+            if "nodes" in edited or "edges" in edited
             else pending_proposal
         )
 
         result = store.apply_proposal(proposal)
-        app.config["PENDING_PROPOSAL"] = None
 
         # Record provenance; non-fatal so a capture failure never rolls back the graph.
         try:
@@ -558,7 +564,9 @@ def _register_routes(app: Flask) -> None:
 
         Returns: 204 No Content.
         """
-        app.config["PENDING_PROPOSAL"] = None
+        body = request.get_json(silent=True) or {}
+        token = body.get("proposal_token", "")
+        app.config.get("PENDING_PROPOSALS", {}).pop(token, None)
         return "", 204
 
     # -------------------------------------------------------------------

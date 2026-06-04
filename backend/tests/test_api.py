@@ -461,15 +461,22 @@ class TestConfirmProposalRoute:
     def test_confirm_uses_edited_proposal_body(self, tmp_db: str) -> None:
         parser = InputParser(FakeOllama())
         app = create_app({"db_path": tmp_db, "TESTING": True, "parser": parser})
-        app.config["PENDING_PROPOSAL"] = ProposedGraph(
-            nodes=[ProposedNode(NodeType.SKILL, "Original", {})],
-            edges=[],
-        )
+        token = "test-token"
+        app.config["PENDING_PROPOSALS"] = {
+            token: {
+                "proposal": ProposedGraph(
+                    nodes=[ProposedNode(NodeType.SKILL, "Original", {})],
+                    edges=[],
+                ),
+                "sentence": "",
+            }
+        }
 
         client = app.test_client()
         resp = client.post(
             "/api/parse/confirm",
             json={
+                "proposal_token": token,
                 "nodes": [
                     {
                         "label": "Ollama",

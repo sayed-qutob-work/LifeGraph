@@ -127,22 +127,34 @@ async function parseSentence(sentence) {
 /**
  * Confirm a parsed proposal, persisting it to the store.
  * POST /api/parse/confirm → { nodes: [...], edges: [...] }
+ *
+ * @param {object} proposal - The (possibly edited) proposal nodes/edges.
+ * @param {string} [token] - The proposal_token returned by /api/parse.
  */
-async function confirmProposal(proposal) {
+async function confirmProposal(proposal, token) {
+    const body = Object.assign({}, proposal);
+    if (token != null) {
+        body.proposal_token = token;
+    }
     return apiFetch("/api/parse/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(proposal),
+        body: JSON.stringify(body),
     });
 }
 
 /**
  * Reject a parsed proposal (no write occurs).
  * POST /api/parse/reject → null (204)
+ *
+ * @param {string} [token] - The proposal_token returned by /api/parse.
  */
-async function rejectProposal() {
+async function rejectProposal(token) {
+    const body = token != null ? { proposal_token: token } : {};
     return apiFetch("/api/parse/reject", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
     });
 }
 
