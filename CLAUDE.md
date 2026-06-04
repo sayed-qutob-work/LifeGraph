@@ -88,3 +88,6 @@ Vanilla ES5 IIFE modules (no framework, no bundler) served by Flask from `backen
 - Timestamps are ISO-8601 UTC strings (`YYYY-MM-DDTHH:MM:SSZ`); pre-migration rows have empty timestamp strings and are excluded from "recent" queries.
 - Nodes/edges carry `origin` = `"manual"` or `"parsed"`.
 - Source files carry `Requirements: N.N` references back to `.kiro/specs/lifegraph/requirements.md` — consult it for the rationale behind a behavior.
+
+## Working Plan
+See `task.md` for full strategy, validated decisions, and current task.
