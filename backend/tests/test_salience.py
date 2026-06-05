@@ -131,14 +131,24 @@ class TestHold:
         verdict = classify("I met Alice yesterday", _person_proposal())
         assert verdict.decision is SalienceDecision.HOLD
 
-    def test_user_relevant_type_but_not_first_person_holds(self) -> None:
-        # A tool is mentioned, but the sentence is not about the user's setup.
-        verdict = classify("Ollama is a popular local runtime", _tool_proposal())
+    def test_first_person_ambiguous_action_holds(self) -> None:
+        # First-person reference keeps it out of DROP, but "tried" is not a
+        # stative marker → not enough confidence to auto-KEEP → HOLD.
+        verdict = classify("I tried Ollama briefly", _tool_proposal())
         assert verdict.decision is SalienceDecision.HOLD
 
-    def test_third_party_statement_holds(self) -> None:
+    def test_user_relevant_type_but_not_first_person_drops(self) -> None:
+        # A tool is mentioned, but there is no first-person reference → general
+        # claim about an external entity → DROP.
+        verdict = classify("Ollama is a popular local runtime", _tool_proposal())
+        assert verdict.decision is SalienceDecision.DROP
+        assert "no_first_person_reference" in verdict.signals
+
+    def test_third_party_statement_drops(self) -> None:
+        # No first-person reference → general third-party statement → DROP.
         verdict = classify("Alice referred Bob to the program", _person_proposal())
-        assert verdict.decision is SalienceDecision.HOLD
+        assert verdict.decision is SalienceDecision.DROP
+        assert "no_first_person_reference" in verdict.signals
 
 
 # ---------------------------------------------------------------------------

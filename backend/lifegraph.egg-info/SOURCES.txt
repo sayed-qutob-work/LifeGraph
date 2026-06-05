@@ -5,8 +5,11 @@ lifegraph/api.py
 lifegraph/config.py
 lifegraph/dashboard.py
 lifegraph/domain.py
+lifegraph/factory.py
+lifegraph/mcp_server.py
 lifegraph/ollama_client.py
 lifegraph/parser.py
+lifegraph/salience.py
 lifegraph/search.py
 lifegraph/serializer.py
 lifegraph/server.py
@@ -28,9 +31,12 @@ tests/test_dashboard.py
 tests/test_dashboard_property.py
 tests/test_domain.py
 tests/test_loopback_property.py
+tests/test_mcp_server.py
 tests/test_ollama_client.py
 tests/test_parser.py
 tests/test_parser_property.py
+tests/test_salience.py
+tests/test_salience_property.py
 tests/test_search.py
 tests/test_search_property.py
 tests/test_serializer.py
@@ -42,6 +48,7 @@ tests/test_store_apply_proposal_property.py
 tests/test_store_confirm_reject_property.py
 tests/test_store_delete_node.py
 tests/test_store_edge_write.py
+tests/test_store_held.py
 tests/test_store_property.py
 tests/test_store_write.py
 tests/test_validation.py

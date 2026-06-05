@@ -93,19 +93,51 @@ LifeGraph is the **one personal context layer you own that follows you across ev
 
 ---
 
-## 7. Current Task (start here, right now)
+## 7. Current Task
 
 **Build the salience filter and wire it in front of `add_observation` in the MCP server.**
 
 Why this first: passive capture is the unlock, but without a salience gate the graph fills with noise and becomes untrustworthy — which kills the whole value prop. `add_observation` already parses and persists; right now it persists *everything* it's told. You're inserting a decision step before persistence.
 
-Concrete starting steps:
-1. Open `backend/lifegraph/mcp_server.py`, find `add_observation`, trace the path into `parser.py` → `store.apply_proposal`.
-2. Add a salience check between parse and persist. v1 = cheap heuristics: does the proposed content describe a *stable* fact about the user (their tools/models/hardware/projects/decisions/preferences) vs. a transient one-off (a question, a hypothetical, a code snippet, something about a third party with no relation to the user)? Reject or hold the transient ones.
-3. Anything that passes but is uncertain → route to a **hold/review** state rather than auto-persisting (this is the seed of the Month-1 review queue).
-4. Dogfood: run a few real Claude Code sessions through it and eyeball precision/recall of what got kept.
+### Status: code built & green (478 tests pass). The salience filter exists; what's missing is a **measurable exit criterion** for it. That is the next task.
 
-Do NOT start with the log ingestor, retrieval ranking, or any UI polish. Salience gate first — everything downstream depends on the graph being clean.
+**Done (filter built, steps 1–3):**
+- `backend/lifegraph/salience.py` — pure classifier `classify(sentence, ProposedGraph) -> SalienceVerdict` returning KEEP / HOLD / DROP. v1 = cheap heuristics:
+  - **DROP**: empty extraction; questions (`?` or interrogative opener); hypotheticals (`what if`, `suppose`…); assistant commands (`can you`, `please fix`…); code (fences or dense punctuation); **no first-person reference at all** (third-party/general claims like "Ollama is a popular runtime").
+  - **KEEP**: first-person stative (`I use`, `my setup`…) **and** a user-relevant node type (Tool/Model/Hardware/Project/Skill/Goal/Habit/Technology/Program).
+  - **HOLD**: has a first-person reference and parsed into something, but not a clear stative user fact (e.g. "I tried Ollama briefly"). Conservative on purpose — ambiguous goes to HOLD, never auto-KEEP. Contract is transport-agnostic so an LLM judge can replace it later without touching callers.
+- `store.py` + `domain.py` — `held_observations` table (migration `_migrate_3`, `SCHEMA_VERSION` 3→4); `hold_observation` / `list_held` / `get_held` / `resolve_held`; `proposal_to_dict` / `proposal_from_dict` so a held proposal is stored verbatim and re-appliable. v3→v4 migration verified on an existing DB.
+- `mcp_server.py` — `add_observation` classifies before persisting and returns `{status: kept|held|dropped|error, reason, signals, …}`; KEEP persists + records provenance, HOLD queues, DROP discards, and parser/Ollama failures return a structured status instead of throwing. Added `list_held` and `review_held(held_id, "keep"|"drop")` MCP tools — the seed of the Month-1 review queue.
+- Tests: **478 pass.** `test_salience.py`, `test_salience_property.py`, `test_store_held.py`, `test_mcp_server.py`. Note: `mcp` (a declared core dep) is installed in `.venv`.
+
+> **Uncommitted on resume:** the working tree has the first-person-gating refinement above (salience.py + mcp_server.py error handling + updated tests), still uncommitted. Step A below commits it.
+
+---
+
+### The continuation plan (do these in order)
+
+**Step A — Commit the in-flight refinement.**
+- Confirm green: `cd backend && python -m pytest -q` → expect **478 passed**.
+- Stage only the source + test changes, NOT the working DB or generated artifacts. Specifically commit: `backend/lifegraph/salience.py`, `backend/lifegraph/mcp_server.py`, `backend/tests/test_salience.py`, `backend/tests/test_mcp_server.py`, `task.md`. Do **not** commit `backend/lifegraph.db`, `*.db-shm`, `*.db-wal`, or `backend/my_table_data.csv` (these are local dogfood state — leave them out; consider adding them to `.gitignore` in this commit).
+- Message: `feat: drop third-party observations lacking a first-person reference`.
+
+**Step B — Build the salience ground-truth set + precision/recall harness.** *(this is THE task — resolves §8 "Salience ground truth", gives dogfooding an exit criterion, needs no Ollama because `classify` is pure)*
+1. Create `backend/tests/salience_corpus.py`: a labeled dataset. Each entry = `(sentence, proposal_factory, expected_decision, category)` where `expected_decision` is a `SalienceDecision` and `category` is one of `question | hypothetical | command | code | third_party | user_fact | ambiguous_first_person | empty`. Reuse small `ProposedGraph` factories (mirror the `_tool_proposal()` / `_person_proposal()` helpers already in `test_salience.py`) — `classify` only inspects node *types* and emptiness, so low-fidelity proposals are fine. Aim for **~45–60 examples**, well spread across all three verdicts and every category. These are hand-labeled by the intended behavior, not by current output.
+2. Create `backend/tests/test_salience_corpus.py`: run `classify` over the whole corpus and
+   - build a 3×3 confusion matrix (expected × predicted) and per-class precision/recall;
+   - **assert the trust invariant (hard): zero false auto-KEEPs** — no example whose true label is HOLD or DROP may be classified KEEP. A wrong auto-keep is the only error that silently corrupts the graph, so this must be 0.
+   - assert conservative soft floors (start lenient, tighten as the corpus grows): KEEP recall ≥ 0.80, DROP recall ≥ 0.90. Use `pytest.approx`/explicit counts, and on failure print the confusion matrix + every misclassified `(sentence, expected, got, signals)` so tuning is one glance.
+3. Print the matrix + per-class metrics even on success (e.g. via `-s`, or write a tiny `pytest` `--salience-report` flag / a `scripts/salience_report.py`) so there's a baseline number to compare dogfooding against.
+4. If the corpus surfaces clear misclassifications, tune in `salience.py` (the `_FIRST_PERSON_STATIVE` / `_FIRST_PERSON_ANY` / marker lists, the `0.08` code-density threshold) — but only to fix genuine mislabels, and keep the zero-false-KEEP invariant sacred. Re-run the full suite.
+5. Commit: `test: add salience ground-truth corpus and precision/recall harness`.
+
+**Step C — Live dogfooding (DEFERRED until Ollama is running; do not attempt headless).**
+- Requires `ollama serve` up on `127.0.0.1:11434` with `LIFEGRAPH_MODEL` pulled. Run `python -m lifegraph.mcp_server`, push real Claude Code / Desktop sentences through `add_observation`, inspect the hold queue with `list_held`, and compare observed keep/hold/drop rates against the Step-B baseline. Feed any new misclassified real sentences back into the corpus (Step B1) — that's how the test set grows teeth.
+- Exit criterion (now concrete, from Step B): zero false auto-KEEPs on real traffic and the soft floors holding on the expanded corpus.
+
+**Deferred decisions (do NOT act on these yet — they wait for dogfooding evidence):** heuristics-only vs. LLM judge (§8); review cadence (§8); whether to also gate the HTTP `/api/parse` path (currently MCP-only, since the web path already has per-parse human confirmation).
+
+Do NOT start the log ingestor, retrieval ranking, or any UI polish. Salience gate first — everything downstream depends on the graph being clean.
 
 ---
 

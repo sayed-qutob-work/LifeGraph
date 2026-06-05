@@ -177,6 +177,20 @@ _FIRST_PERSON_STATIVE: tuple[str, ...] = (
     "my stack",
 )
 
+# Broad first-person markers used to detect whether a sentence is about the
+# user at all. Anything with none of these is a general third-party claim.
+_FIRST_PERSON_ANY: tuple[str, ...] = (
+    "i ",
+    "i'm",
+    "im ",
+    "i've",
+    "i'd",
+    "i'll",
+    "my ",
+    " me ",
+    " mine",
+)
+
 # A rough "this looks like code" detector: fenced blocks, or a high density of
 # characters that appear far more in source than in prose.
 _CODE_FENCE = re.compile(r"```|~~~")
@@ -233,6 +247,9 @@ def classify(sentence: str, proposal: ProposedGraph) -> SalienceVerdict:
     if _looks_like_code(text):
         drop_signals.append("code_snippet")
 
+    if not _has_any_first_person(lowered):
+        drop_signals.append("no_first_person_reference")
+
     if drop_signals:
         return SalienceVerdict(
             SalienceDecision.DROP,
@@ -282,6 +299,11 @@ def _has_first_person_stative(lowered: str) -> bool:
 def _touches_user_relevant_type(proposal: ProposedGraph) -> bool:
     """True when any proposed node is a user-setup type (tool/model/hardware/...)."""
     return any(node.type in _USER_RELEVANT_TYPES for node in proposal.nodes)
+
+
+def _has_any_first_person(lowered: str) -> bool:
+    """True when the sentence contains any first-person reference."""
+    return any(marker in lowered for marker in _FIRST_PERSON_ANY)
 
 
 def _looks_like_code(text: str) -> bool:

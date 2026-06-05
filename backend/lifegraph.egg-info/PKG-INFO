@@ -5,6 +5,7 @@ Summary: A fully local, web-based personal knowledge graph system
 Requires-Python: >=3.10
 Requires-Dist: flask<4.0,>=3.0
 Requires-Dist: requests<3.0,>=2.31
+Requires-Dist: mcp<2.0,>=1.0
 Provides-Extra: dev
 Requires-Dist: pytest<9.0,>=8.0; extra == "dev"
 Requires-Dist: hypothesis<7.0,>=6.100; extra == "dev"

@@ -87,8 +87,8 @@ def test_drop_does_not_persist(wired) -> None:
 def test_hold_queues_without_persisting(wired) -> None:
     store, set_proposal = wired
     set_proposal(_tool_proposal())
-    # Tool present but not a first-person fact → HOLD.
-    result = mcp_server.add_observation("Ollama is a popular local runtime")
+    # First-person reference but not a stative marker → HOLD.
+    result = mcp_server.add_observation("I tried Ollama briefly")
     assert result["status"] == "held"
     assert result["held_id"]
     assert store.get_graph().nodes == []
@@ -105,7 +105,7 @@ def test_hold_queues_without_persisting(wired) -> None:
 def test_review_held_keep_persists_and_clears_queue(wired) -> None:
     store, set_proposal = wired
     set_proposal(_tool_proposal())
-    held_id = mcp_server.add_observation("Ollama is a popular local runtime")["held_id"]
+    held_id = mcp_server.add_observation("I tried Ollama briefly")["held_id"]
 
     listed = mcp_server.list_held()["held"]
     assert len(listed) == 1
@@ -120,7 +120,7 @@ def test_review_held_keep_persists_and_clears_queue(wired) -> None:
 def test_review_held_drop_discards(wired) -> None:
     store, set_proposal = wired
     set_proposal(_tool_proposal())
-    held_id = mcp_server.add_observation("Ollama is a popular local runtime")["held_id"]
+    held_id = mcp_server.add_observation("I tried Ollama briefly")["held_id"]
 
     result = mcp_server.review_held(held_id, "drop")
     assert result["status"] == "dropped"
@@ -136,7 +136,7 @@ def test_review_held_rejects_unknown_id(wired) -> None:
 def test_review_held_rejects_bad_decision(wired) -> None:
     store, set_proposal = wired
     set_proposal(_tool_proposal())
-    held_id = mcp_server.add_observation("Ollama is a popular local runtime")["held_id"]
+    held_id = mcp_server.add_observation("I tried Ollama briefly")["held_id"]
     with pytest.raises(ValueError):
         mcp_server.review_held(held_id, "maybe")
 
@@ -144,7 +144,7 @@ def test_review_held_rejects_bad_decision(wired) -> None:
 def test_review_held_rejects_double_resolve(wired) -> None:
     store, set_proposal = wired
     set_proposal(_tool_proposal())
-    held_id = mcp_server.add_observation("Ollama is a popular local runtime")["held_id"]
+    held_id = mcp_server.add_observation("I tried Ollama briefly")["held_id"]
     mcp_server.review_held(held_id, "drop")
     with pytest.raises(ValueError):
         mcp_server.review_held(held_id, "keep")

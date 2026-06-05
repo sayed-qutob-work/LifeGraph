@@ -23,6 +23,7 @@ Tools exposed:
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -30,6 +31,8 @@ from mcp.server.fastmcp import FastMCP
 from lifegraph.config import DEFAULT_DB_PATH
 from lifegraph.domain import EDGE_TYPE_VALUES, NODE_TYPE_VALUES, EdgeType, NodeType
 from lifegraph.factory import make_parser, make_store
+from lifegraph.ollama_client import OllamaTimeoutError, OllamaUnavailableError
+from lifegraph.parser import InputValidationError, InvalidTypeError, UnparseableResponse
 from lifegraph.salience import SalienceDecision, classify
 from lifegraph.search import filter_graph
 from lifegraph.serializer import ContextSerializer
@@ -48,7 +51,8 @@ _parser = None
 def _get_store() -> GraphStore:
     global _store
     if _store is None:
-        _store = make_store(DEFAULT_DB_PATH)
+        db_path = os.environ.get("LIFEGRAPH_DB_PATH", DEFAULT_DB_PATH)
+        _store = make_store(db_path)
     return _store
 
 
@@ -175,7 +179,41 @@ def add_observation(sentence: str) -> dict[str, Any]:
             "LIFEGRAPH_MODEL is set (or lifegraph.toml exists)."
         )
     store = _get_store()
-    proposed = parser.parse(sentence)
+
+    try:
+        proposed = parser.parse(sentence)
+    except (InvalidTypeError, UnparseableResponse) as exc:
+        return {
+            "status": "dropped",
+            "reason": f"LLM produced unparseable output: {exc}",
+            "signals": ["parse_error"],
+            "nodes": [],
+            "edges": [],
+        }
+    except InputValidationError as exc:
+        return {
+            "status": "dropped",
+            "reason": f"Invalid input: {exc}",
+            "signals": ["input_validation_error"],
+            "nodes": [],
+            "edges": [],
+        }
+    except OllamaUnavailableError as exc:
+        return {
+            "status": "error",
+            "reason": f"Ollama unavailable: {exc}",
+            "signals": ["ollama_unavailable"],
+            "nodes": [],
+            "edges": [],
+        }
+    except OllamaTimeoutError:
+        return {
+            "status": "error",
+            "reason": "Ollama request timed out.",
+            "signals": ["ollama_timeout"],
+            "nodes": [],
+            "edges": [],
+        }
 
     verdict = classify(sentence, proposed)
 

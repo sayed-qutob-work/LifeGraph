@@ -1,5 +1,6 @@
 flask<4.0,>=3.0
 requests<3.0,>=2.31
+mcp<2.0,>=1.0
 
 [dev]
 pytest<9.0,>=8.0
