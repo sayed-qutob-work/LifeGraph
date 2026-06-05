@@ -121,15 +121,10 @@ Why this first: passive capture is the unlock, but without a salience gate the g
 - Stage only the source + test changes, NOT the working DB or generated artifacts. Specifically commit: `backend/lifegraph/salience.py`, `backend/lifegraph/mcp_server.py`, `backend/tests/test_salience.py`, `backend/tests/test_mcp_server.py`, `task.md`. Do **not** commit `backend/lifegraph.db`, `*.db-shm`, `*.db-wal`, or `backend/my_table_data.csv` (these are local dogfood state — leave them out; consider adding them to `.gitignore` in this commit).
 - Message: `feat: drop third-party observations lacking a first-person reference`.
 
-**Step B — Build the salience ground-truth set + precision/recall harness.** *(this is THE task — resolves §8 "Salience ground truth", gives dogfooding an exit criterion, needs no Ollama because `classify` is pure)*
-1. Create `backend/tests/salience_corpus.py`: a labeled dataset. Each entry = `(sentence, proposal_factory, expected_decision, category)` where `expected_decision` is a `SalienceDecision` and `category` is one of `question | hypothetical | command | code | third_party | user_fact | ambiguous_first_person | empty`. Reuse small `ProposedGraph` factories (mirror the `_tool_proposal()` / `_person_proposal()` helpers already in `test_salience.py`) — `classify` only inspects node *types* and emptiness, so low-fidelity proposals are fine. Aim for **~45–60 examples**, well spread across all three verdicts and every category. These are hand-labeled by the intended behavior, not by current output.
-2. Create `backend/tests/test_salience_corpus.py`: run `classify` over the whole corpus and
-   - build a 3×3 confusion matrix (expected × predicted) and per-class precision/recall;
-   - **assert the trust invariant (hard): zero false auto-KEEPs** — no example whose true label is HOLD or DROP may be classified KEEP. A wrong auto-keep is the only error that silently corrupts the graph, so this must be 0.
-   - assert conservative soft floors (start lenient, tighten as the corpus grows): KEEP recall ≥ 0.80, DROP recall ≥ 0.90. Use `pytest.approx`/explicit counts, and on failure print the confusion matrix + every misclassified `(sentence, expected, got, signals)` so tuning is one glance.
-3. Print the matrix + per-class metrics even on success (e.g. via `-s`, or write a tiny `pytest` `--salience-report` flag / a `scripts/salience_report.py`) so there's a baseline number to compare dogfooding against.
-4. If the corpus surfaces clear misclassifications, tune in `salience.py` (the `_FIRST_PERSON_STATIVE` / `_FIRST_PERSON_ANY` / marker lists, the `0.08` code-density threshold) — but only to fix genuine mislabels, and keep the zero-false-KEEP invariant sacred. Re-run the full suite.
-5. Commit: `test: add salience ground-truth corpus and precision/recall harness`.
+**Step B — DONE.** Committed `e8956bc`.
+- `backend/tests/salience_corpus.py`: 54 hand-labeled examples across 8 categories (empty, question, hypothetical, command, code, third_party, user_fact, ambiguous_first_person).
+- `backend/tests/test_salience_corpus.py`: confusion matrix, zero-false-KEEP invariant, KEEP recall ≥ 0.80, DROP recall ≥ 0.90.
+- Baseline (479 tests pass): **100% precision/recall on all three classes.** Exit criterion is now concrete: zero false auto-KEEPs on real traffic and recall floors holding on the expanded corpus.
 
 **Step C — Live dogfooding (DEFERRED until Ollama is running; do not attempt headless).**
 - Requires `ollama serve` up on `127.0.0.1:11434` with `LIFEGRAPH_MODEL` pulled. Run `python -m lifegraph.mcp_server`, push real Claude Code / Desktop sentences through `add_observation`, inspect the hold queue with `list_held`, and compare observed keep/hold/drop rates against the Step-B baseline. Feed any new misclassified real sentences back into the corpus (Step B1) — that's how the test set grows teeth.
