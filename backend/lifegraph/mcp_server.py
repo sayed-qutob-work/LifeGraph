@@ -13,7 +13,9 @@ or configure in Claude Desktop's MCP settings:
 Tools exposed:
     search_graph    — filter nodes/edges by label term and/or type
     get_context     — BFS neighbourhood snapshot for an LLM prompt
-    add_observation — parse a sentence and persist extracted knowledge
+    add_observation — parse a sentence, salience-filter it, then keep/hold/drop
+    list_held       — list observations held back by the salience filter
+    review_held     — resolve a held observation (keep → persist, or drop)
     upsert_node     — create or return a node by (label, type) identity
     create_edge     — create a directed edge between two existing nodes
 """
@@ -28,6 +30,7 @@ from mcp.server.fastmcp import FastMCP
 from lifegraph.config import DEFAULT_DB_PATH
 from lifegraph.domain import EDGE_TYPE_VALUES, NODE_TYPE_VALUES, EdgeType, NodeType
 from lifegraph.factory import make_parser, make_store
+from lifegraph.salience import SalienceDecision, classify
 from lifegraph.search import filter_graph
 from lifegraph.serializer import ContextSerializer
 from lifegraph.store import GraphStore
@@ -145,16 +148,25 @@ def get_context(node_id: str, max_hops: int = 2) -> str:
 def add_observation(sentence: str) -> dict[str, Any]:
     """Parse a natural-language sentence and add extracted knowledge to the graph.
 
-    Sends the sentence to Ollama, extracts proposed nodes and edges, persists
-    them (with deduplication), and records the source sentence for provenance.
+    Sends the sentence to Ollama and extracts proposed nodes and edges, then runs
+    a salience filter before persisting so the graph stays clean during passive
+    capture:
+
+    - "kept":    a stable fact about you — persisted (with deduplication) and the
+                 source sentence recorded for provenance.
+    - "held":    parsed into a graph but not clearly a stable fact — stored in the
+                 review queue (see list_held / review_held) instead of persisted.
+    - "dropped": transient (a question, hypothetical, code snippet, command, or an
+                 empty extraction) — discarded without persisting.
 
     Args:
         sentence: A description of something to remember, e.g.
                   "Learning Python supports my goal of building apps".
 
     Returns:
-        {"nodes": [...], "edges": [...]} — the nodes and edges that were
-        created or resolved during this operation.
+        A dict with a "status" of "kept" | "held" | "dropped", a "reason", and —
+        for "kept" — the {"nodes": [...], "edges": [...]} that were created or
+        resolved; for "held" — the "held_id".
     """
     parser = _get_parser()
     if parser is None:
@@ -164,6 +176,32 @@ def add_observation(sentence: str) -> dict[str, Any]:
         )
     store = _get_store()
     proposed = parser.parse(sentence)
+
+    verdict = classify(sentence, proposed)
+
+    if verdict.decision is SalienceDecision.DROP:
+        return {
+            "status": "dropped",
+            "reason": verdict.reason,
+            "signals": verdict.signals,
+            "nodes": [],
+            "edges": [],
+        }
+
+    if verdict.decision is SalienceDecision.HOLD:
+        held = store.hold_observation(
+            sentence, proposed, reason=verdict.reason, signals=verdict.signals
+        )
+        return {
+            "status": "held",
+            "reason": verdict.reason,
+            "signals": verdict.signals,
+            "held_id": held.id,
+            "nodes": [],
+            "edges": [],
+        }
+
+    # KEEP — persist and record provenance.
     result = store.apply_proposal(proposed)
     try:
         store.record_capture(
@@ -174,6 +212,86 @@ def add_observation(sentence: str) -> dict[str, Any]:
     except Exception:
         pass
     return {
+        "status": "kept",
+        "reason": verdict.reason,
+        "signals": verdict.signals,
+        "nodes": [_node_dict(n) for n in result.nodes],
+        "edges": [_edge_dict(e) for e in result.edges],
+    }
+
+
+@mcp.tool()
+def list_held() -> dict[str, Any]:
+    """List observations the salience filter held back for review.
+
+    These were parsed successfully but not auto-persisted because they were not
+    clearly stable facts about you. Review each with review_held.
+
+    Returns:
+        {"held": [{"id", "sentence", "reason", "signals",
+                   "node_count", "edge_count", "held_at"}, ...]}
+    """
+    store = _get_store()
+    held = store.list_held(status="pending")
+    return {
+        "held": [
+            {
+                "id": h.id,
+                "sentence": h.sentence,
+                "reason": h.reason,
+                "signals": h.signals,
+                "node_count": len(h.proposal.nodes),
+                "edge_count": len(h.proposal.edges),
+                "held_at": h.held_at,
+            }
+            for h in held
+        ]
+    }
+
+
+@mcp.tool()
+def review_held(held_id: str, decision: str) -> dict[str, Any]:
+    """Resolve a held observation: keep it (persist) or drop it (discard).
+
+    Args:
+        held_id: The id of the held observation (from list_held).
+        decision: "keep" to persist the held proposal into the graph, or
+                  "drop" to discard it. Either way the item leaves the queue.
+
+    Returns:
+        For "keep": {"status": "kept", "nodes": [...], "edges": [...]}.
+        For "drop": {"status": "dropped"}.
+    """
+    decision = (decision or "").strip().lower()
+    if decision not in ("keep", "drop"):
+        raise ValueError("decision must be 'keep' or 'drop'")
+
+    store = _get_store()
+    held = store.get_held(held_id)
+    if held is None:
+        raise ValueError(f"Held observation not found: '{held_id}'")
+    if held.status != "pending":
+        raise ValueError(
+            f"Held observation '{held_id}' is already resolved (status={held.status})."
+        )
+
+    if decision == "drop":
+        store.resolve_held(held_id, "dropped")
+        return {"status": "dropped", "nodes": [], "edges": []}
+
+    # keep — persist the stored proposal, record provenance, then resolve.
+    result = store.apply_proposal(held.proposal)
+    try:
+        store.record_capture(
+            held.sentence,
+            [n.id for n in result.nodes],
+            [e.id for e in result.edges],
+        )
+    except Exception:
+        pass
+    store.resolve_held(held_id, "kept")
+    return {
+        "status": "kept",
         "nodes": [_node_dict(n) for n in result.nodes],
         "edges": [_edge_dict(e) for e in result.edges],
     }

@@ -21,11 +21,14 @@ from lifegraph.domain import (
     Edge,
     EdgeType,
     Graph,
+    HeldObservation,
     Node,
     NodeType,
     NODE_TYPE_VALUES,
     ProposedGraph,
     normalize,
+    proposal_from_dict,
+    proposal_to_dict,
 )
 from lifegraph.validation import (
     validate_attributes,
@@ -142,6 +145,18 @@ CREATE TABLE IF NOT EXISTS captures (
 )
 """
 
+_CREATE_HELD_OBSERVATIONS_SQL = """\
+CREATE TABLE IF NOT EXISTS held_observations (
+    id            TEXT PRIMARY KEY,
+    sentence      TEXT NOT NULL,
+    proposal_json TEXT NOT NULL,
+    reason        TEXT NOT NULL DEFAULT '',
+    signals       TEXT NOT NULL DEFAULT '[]',
+    held_at       TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending'
+)
+"""
+
 _INDEX_SQL = """\
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
@@ -154,6 +169,7 @@ PRAGMA foreign_keys = ON;
 {_CREATE_NODES_SQL};
 {_CREATE_EDGES_SQL};
 {_CREATE_CAPTURES_SQL};
+{_CREATE_HELD_OBSERVATIONS_SQL};
 {_INDEX_SQL}
 """
 
@@ -162,7 +178,7 @@ PRAGMA foreign_keys = ON;
 # Schema versioning and migrations
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = 3  # Increment when a new migration is appended to _MIGRATIONS.
+SCHEMA_VERSION = 4  # Increment when a new migration is appended to _MIGRATIONS.
 
 
 def _table_allows_values(
@@ -242,10 +258,16 @@ def _migrate_2_add_captures(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_CAPTURES_SQL)
 
 
+def _migrate_3_add_held_observations(conn: sqlite3.Connection) -> None:
+    """Create the held_observations table (salience review queue)."""
+    conn.execute(_CREATE_HELD_OBSERVATIONS_SQL)
+
+
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migrate_0_rebuild_check_constraints,
     _migrate_1_add_timestamps,
     _migrate_2_add_captures,
+    _migrate_3_add_held_observations,
 ]
 
 
@@ -1111,6 +1133,112 @@ class GraphStore:
                 "VALUES (?, ?, ?, ?, ?)",
                 (capture_id, sentence, now,
                  json.dumps(node_ids), json.dumps(edge_ids)),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+    # ------------------------------------------------------------------
+    # Held observations (salience review queue)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_held(row: sqlite3.Row) -> HeldObservation:
+        """Convert a held_observations row to a HeldObservation domain object."""
+        return HeldObservation(
+            id=row["id"],
+            sentence=row["sentence"],
+            proposal=proposal_from_dict(json.loads(row["proposal_json"])),
+            reason=row["reason"],
+            signals=json.loads(row["signals"]) if row["signals"] else [],
+            held_at=row["held_at"],
+            status=row["status"],
+        )
+
+    def hold_observation(
+        self,
+        sentence: str,
+        proposal: ProposedGraph,
+        reason: str = "",
+        signals: list[str] | None = None,
+    ) -> HeldObservation:
+        """Store an observation the salience filter declined to auto-persist.
+
+        The original sentence and the full parsed proposal are kept verbatim so
+        the user can later review and either keep (re-apply) or drop it. Nothing
+        is written to the nodes/edges tables here.
+
+        Returns the stored HeldObservation (status='pending').
+        """
+        conn = self._connection
+        held_id = self._id_factory()
+        now = _utcnow()
+        proposal_json = json.dumps(proposal_to_dict(proposal))
+        signals_json = json.dumps(signals or [])
+
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                "INSERT INTO held_observations "
+                "(id, sentence, proposal_json, reason, signals, held_at, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (held_id, sentence, proposal_json, reason, signals_json, now, "pending"),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+        return HeldObservation(
+            id=held_id,
+            sentence=sentence,
+            proposal=proposal,
+            reason=reason,
+            signals=list(signals or []),
+            held_at=now,
+            status="pending",
+        )
+
+    def list_held(self, status: str = "pending") -> list[HeldObservation]:
+        """Return held observations with the given status, most-recent first."""
+        conn = self._connection
+        rows = conn.execute(
+            "SELECT * FROM held_observations WHERE status = ? ORDER BY held_at DESC",
+            (status,),
+        ).fetchall()
+        return [self._row_to_held(r) for r in rows]
+
+    def get_held(self, held_id: str) -> HeldObservation | None:
+        """Fetch a single held observation by id, or None if absent."""
+        conn = self._connection
+        row = conn.execute(
+            "SELECT * FROM held_observations WHERE id = ?", (held_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_held(row)
+
+    def resolve_held(self, held_id: str, status: str) -> None:
+        """Mark a held observation as resolved ('kept' or 'dropped').
+
+        This only updates the queue row's status; it does not itself persist the
+        proposal. Callers that 'keep' an observation should call apply_proposal
+        with the held proposal first. Raises ValueError if no such held
+        observation exists.
+        """
+        conn = self._connection
+        row = conn.execute(
+            "SELECT id FROM held_observations WHERE id = ?", (held_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Held observation not found: '{held_id}'")
+
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                "UPDATE held_observations SET status = ? WHERE id = ?",
+                (status, held_id),
             )
             conn.execute("COMMIT")
         except Exception:

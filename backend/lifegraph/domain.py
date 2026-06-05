@@ -175,3 +175,68 @@ class ProposedGraph:
 
     nodes: List[ProposedNode] = field(default_factory=list)
     edges: List[ProposedEdge] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Held observations (salience review queue)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HeldObservation:
+    """An observation the salience filter held back from auto-persisting.
+
+    Stored verbatim (the original sentence plus the parsed proposal) so the
+    user can later review it and either keep (re-apply the proposal) or drop it.
+    """
+
+    id: str
+    sentence: str
+    proposal: "ProposedGraph"
+    reason: str
+    signals: List[str] = field(default_factory=list)
+    held_at: str = ""
+    status: str = "pending"  # "pending" | "kept" | "dropped"
+
+
+def proposal_to_dict(proposal: ProposedGraph) -> Dict:
+    """Serialize a ProposedGraph to a JSON-safe dict (for held-observation storage)."""
+    return {
+        "nodes": [
+            {"type": n.type.value, "label": n.label, "attributes": dict(n.attributes)}
+            for n in proposal.nodes
+        ],
+        "edges": [
+            {
+                "source_label": e.source_label,
+                "source_type": e.source_type.value,
+                "target_label": e.target_label,
+                "target_type": e.target_type.value,
+                "type": e.type.value,
+            }
+            for e in proposal.edges
+        ],
+    }
+
+
+def proposal_from_dict(data: Dict) -> ProposedGraph:
+    """Reconstruct a ProposedGraph from a dict produced by proposal_to_dict."""
+    nodes = [
+        ProposedNode(
+            type=NodeType(n["type"]),
+            label=n["label"],
+            attributes=dict(n.get("attributes", {})),
+        )
+        for n in data.get("nodes", [])
+    ]
+    edges = [
+        ProposedEdge(
+            source_label=e["source_label"],
+            source_type=NodeType(e["source_type"]),
+            target_label=e["target_label"],
+            target_type=NodeType(e["target_type"]),
+            type=EdgeType(e["type"]),
+        )
+        for e in data.get("edges", [])
+    ]
+    return ProposedGraph(nodes=nodes, edges=edges)
