@@ -112,13 +112,17 @@ CORPUS: list[CorpusEntry] = [
     CorpusEntry("if (x > 0) { return x; } else { return -x; }", _tool(), DROP, "code"),
     CorpusEntry("response = client.generate({'prompt': q, 'temperature': 0})", _tool(), DROP, "code"),
 
-    # ── third_party (5) ───────────────────────────────────────────────────
+    # ── third_party (8) ───────────────────────────────────────────────────
     # No first-person reference → general external claim → DROP.
     CorpusEntry("Ollama is a popular local runtime", _tool(), DROP, "third_party"),
     CorpusEntry("llama3 was released by Meta", _model(), DROP, "third_party"),
     CorpusEntry("The RTX 3090 is a powerful GPU", _hardware(), DROP, "third_party"),
     CorpusEntry("Python is widely used for ML", _technology(), DROP, "third_party"),
     CorpusEntry("VS Code has great Python extensions", _tool(), DROP, "third_party"),
+    # Real-world leaks caught during dogfooding (server was on old code, now regression tests).
+    CorpusEntry("Llama3 performs well on extraction tasks.", _model(), DROP, "third_party"),
+    CorpusEntry("Most developers prefer REST over GraphQL.", _technology(), DROP, "third_party"),
+    CorpusEntry("Claude is good at coding tasks.", _tool(), DROP, "third_party"),
 
     # ── user_fact (16) ────────────────────────────────────────────────────
     # First-person stative + user-relevant type → stable fact → KEEP.
