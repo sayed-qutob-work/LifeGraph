@@ -191,6 +191,13 @@ _FIRST_PERSON_ANY: tuple[str, ...] = (
     " mine",
 )
 
+# Handles "my main project", "my side project", "my current model", etc.
+# The exact-substring list misses an adjective inserted between "my" and the noun.
+_MY_ADJ_NOUN = re.compile(
+    r"my\s+\w+\s+"
+    r"(project|workflow|stack|setup|machine|gpu|laptop|model)\b"
+)
+
 # A rough "this looks like code" detector: fenced blocks, or a high density of
 # characters that appear far more in source than in prose.
 _CODE_FENCE = re.compile(r"```|~~~")
@@ -293,7 +300,10 @@ def _opens_with_interrogative(lowered: str) -> bool:
 
 def _has_first_person_stative(lowered: str) -> bool:
     """True when the sentence states something about the user's own setup."""
-    return any(cue in lowered for cue in _FIRST_PERSON_STATIVE)
+    if any(cue in lowered for cue in _FIRST_PERSON_STATIVE):
+        return True
+    # Catch "my [adjective] project/workflow/..." that exact-substring misses.
+    return bool(_MY_ADJ_NOUN.search(lowered))
 
 
 def _touches_user_relevant_type(proposal: ProposedGraph) -> bool:

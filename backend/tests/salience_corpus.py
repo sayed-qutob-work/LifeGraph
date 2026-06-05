@@ -120,7 +120,7 @@ CORPUS: list[CorpusEntry] = [
     CorpusEntry("Python is widely used for ML", _technology(), DROP, "third_party"),
     CorpusEntry("VS Code has great Python extensions", _tool(), DROP, "third_party"),
 
-    # ── user_fact (14) ────────────────────────────────────────────────────
+    # ── user_fact (16) ────────────────────────────────────────────────────
     # First-person stative + user-relevant type → stable fact → KEEP.
     CorpusEntry("I use Ollama for local inference", _tool(), KEEP, "user_fact"),
     CorpusEntry("I'm running llama3 on my machine", _model(), KEEP, "user_fact"),
@@ -136,6 +136,9 @@ CORPUS: list[CorpusEntry] = [
     CorpusEntry("I've been using Python for years", _skill(), KEEP, "user_fact"),
     CorpusEntry("My GPU is an RTX 3090", _hardware(), KEEP, "user_fact"),
     CorpusEntry("I configured my Ollama to use llama3", _tool(), KEEP, "user_fact"),
+    # Adjective between "my" and the noun — caught by the _MY_ADJ_NOUN regex.
+    CorpusEntry("My main project right now is LifeGraph", _project(), KEEP, "user_fact"),
+    CorpusEntry("My current model is llama3", _model(), KEEP, "user_fact"),
 
     # ── ambiguous_first_person (7) ────────────────────────────────────────
     # Has a first-person reference and parsed into something, but the verb is
