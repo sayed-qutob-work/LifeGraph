@@ -1,7 +1,7 @@
 # LifeGraph — Project Plan & Working Memory
 
 > Read this when resuming work. It contains every settled decision so you don't re-derive anything.
-> Last strategy review: 2026-06-05.
+> Last strategy review: 2026-06-06.
 
 ---
 
@@ -71,15 +71,17 @@ LifeGraph is the **one personal context layer you own that follows you across ev
 
 ### Month 1 — Make the MCP passive path genuinely good
 `add_observation` already exists; make it trustworthy.
-- Add the **salience filter** so it stops eating noise.
-- Harden **dedup-on-write**.
-- Build a **dead-simple review view** (keep/drop).
+- Add the **salience filter** so it stops eating noise. ✅ *done — `salience.py`, 479 tests, 100% precision/recall on the corpus.*
+- Build a **dry-run JSONL ingestor** (report-only): walk `~/.claude/projects/**/*.jsonl` through the existing parser + `salience.classify` and print a KEEP/HOLD/DROP report **without writing to the DB.** This validates the salience exit criterion against hundreds of real sentences at once (instead of slow hand-fed dogfood), sizes the backlog against the ~300-fact moat threshold, and is ~80% of the real ingestor.
+- **Then let the dry-run numbers pick the next move** (resolves the ingestor-vs-review-UI ordering tension):
+  - auto-KEEP trustworthy **and** HOLD pile small → flip persistence on, harden **dedup-on-write**, defer the review view.
+  - HOLD pile large → build the **dead-simple review view** (keep/drop) *first*, because clearing the pile one-by-one via MCP `review_held` won't scale.
 - **Dogfood daily** inside Claude Code / Claude Desktop.
-- **Deliverable:** your real conversations populate a clean-ish graph with zero manual typing.
+- **Deliverable:** your real conversations + on-disk backlog populate a clean-ish graph with zero manual typing.
 
-### Month 2 — Close the loop (retrieval + backfill)
+### Month 2 — Close the loop (retrieval)
 - Make `get_context` **relevance-ranked**; add **saved bundles**.
-- Build the **Claude Code JSONL ingestor** to backfill everything already on disk.
+- (Backfill moved up to Month 1: the ingestor that started as a dry-run gets persistence flipped on.)
 - **Deliverable:** a working capture → store → retrieve → inject loop you use every day.
 
 ### Month 3 — Measure, then decide (do NOT add features)
@@ -95,44 +97,53 @@ LifeGraph is the **one personal context layer you own that follows you across ev
 
 ## 7. Current Task
 
-**Build the salience filter and wire it in front of `add_observation` in the MCP server.**
+**Build the dry-run (report-only) Claude Code JSONL ingestor: `backend/lifegraph/ingest.py`.**
 
-Why this first: passive capture is the unlock, but without a salience gate the graph fills with noise and becomes untrustworthy — which kills the whole value prop. `add_observation` already parses and persists; right now it persists *everything* it's told. You're inserting a decision step before persistence.
+Walk `~/.claude/projects/**/*.jsonl`, pull candidate sentences out of each session, push every one through the **existing** `parser.parse` + `salience.classify`, and print a KEEP/HOLD/DROP confusion report **without writing a single row to the DB.** Count the verdicts, sample a handful of each, and stop. No persistence, no review UI, no schema change.
 
-### Status: code built & green (478 tests pass). The salience filter exists; what's missing is a **measurable exit criterion** for it. That is the next task.
+**Why this is next (it threads the one open disagreement instead of guessing):**
+The remaining tension is *ordering* — does the JSONL ingestor come before the review view, or after? The plan says clean-first (review UI is a prerequisite, because a backfill dumps a HOLD pile only clearable one-by-one via `review_held`). The earlier assessment says volume-first (you can't answer the Month-3 question on an empty graph, and live MCP capture is too slow to reach the ~300-fact moat). A dry-run settles it with data:
 
-**Done (filter built, steps 1–3):**
-- `backend/lifegraph/salience.py` — pure classifier `classify(sentence, ProposedGraph) -> SalienceVerdict` returning KEEP / HOLD / DROP. v1 = cheap heuristics:
-  - **DROP**: empty extraction; questions (`?` or interrogative opener); hypotheticals (`what if`, `suppose`…); assistant commands (`can you`, `please fix`…); code (fences or dense punctuation); **no first-person reference at all** (third-party/general claims like "Ollama is a popular runtime").
-  - **KEEP**: first-person stative (`I use`, `my setup`…) **and** a user-relevant node type (Tool/Model/Hardware/Project/Skill/Goal/Habit/Technology/Program).
-  - **HOLD**: has a first-person reference and parsed into something, but not a clear stative user fact (e.g. "I tried Ollama briefly"). Conservative on purpose — ambiguous goes to HOLD, never auto-KEEP. Contract is transport-agnostic so an LLM judge can replace it later without touching callers.
-- `store.py` + `domain.py` — `held_observations` table (migration `_migrate_3`, `SCHEMA_VERSION` 3→4); `hold_observation` / `list_held` / `get_held` / `resolve_held`; `proposal_to_dict` / `proposal_from_dict` so a held proposal is stored verbatim and re-appliable. v3→v4 migration verified on an existing DB.
-- `mcp_server.py` — `add_observation` classifies before persisting and returns `{status: kept|held|dropped|error, reason, signals, …}`; KEEP persists + records provenance, HOLD queues, DROP discards, and parser/Ollama failures return a structured status instead of throwing. Added `list_held` and `review_held(held_id, "keep"|"drop")` MCP tools — the seed of the Month-1 review queue.
-- Tests: **478 pass.** `test_salience.py`, `test_salience_property.py`, `test_store_held.py`, `test_mcp_server.py`. Note: `mcp` (a declared core dep) is installed in `.venv`.
+1. **It IS the Step-C exit criterion, at ~100× the data.** Step C's bar is "zero false auto-KEEPs on real traffic." A dry-run over your on-disk backlog tests that against hundreds of real sentences in one pass — far better than slowly hand-feeding live dogfood.
+2. **It answers the ordering question with numbers, not a guess.** Trustworthy auto-KEEP + small HOLD pile → flip persistence on and defer the review UI (assessment's order). Huge HOLD pile → build the review view first (plan's order). Let the report decide.
+3. **It sizes the opportunity before you invest.** Does your backlog even clear ~300 quality facts? If not, the moat thesis needs rethinking — cheap to learn now.
+4. **It's not throwaway.** Log-walking + extraction is ~80% of the real ingestor. You flip persistence on once the dry-run looks clean.
 
-> **Uncommitted on resume:** the working tree has the first-person-gating refinement above (salience.py + mcp_server.py error handling + updated tests), still uncommitted. Step A below commits it.
+**Deliverable — `ingest.py`:**
+- A walker over `~/.claude/projects/**/*.jsonl` (resolve `~` per-OS; the path is under the user's home, not the repo) that yields candidate user sentences from each session record.
+- Reuse the real pipeline: `factory.make_parser` → `parser.parse(sentence)` → `salience.classify(sentence, proposed)`. Do **not** fork or reimplement either; if the parser needs adapting for batch use, adapt it in place so live `add_observation` and the ingestor stay identical.
+- Output: a printed confusion-style report — counts of KEEP/HOLD/DROP, the DROP-reason breakdown (question / hypothetical / command / code / no-first-person / empty), and N sampled sentences per verdict so you can eyeball false KEEPs by hand.
+- A `--dry-run` default that is the *only* mode for now; persistence is a deliberately separate, later flip (do not add it in this task).
+- Tests in the same style as the rest of the suite (parse the report counts off a small fixture of synthetic JSONL; no network, no real `~/.claude`).
+
+**Exit criterion:** the report runs end-to-end over your real backlog and shows **zero false auto-KEEPs** on a hand-inspected sample, with the KEEP/DROP recall floors from Step B holding. Feed any misclassified real sentence back into `salience_corpus.py` — that's how the corpus grows teeth.
+
+**Caveats:**
+- **Needs Ollama up** (`ollama serve` on `127.0.0.1:11434` with `LIFEGRAPH_MODEL` pulled) — same blocker as Step C, since `parser.parse` calls the LLM. Do not attempt the real-backlog run headless; the *code + fixture tests* can be written and run without Ollama.
+- Touches the **privacy-scoping** open question (§8: ingest all sessions vs. let the user scope projects). Moot for a local dry-run on your own machine — but it becomes real the moment persistence is flipped on, so leave a hook for project/session scoping; don't solve it now.
 
 ---
 
-### The continuation plan (do these in order)
+### Prior steps (DONE — historical record)
 
-**Step A — Commit the in-flight refinement.**
-- Confirm green: `cd backend && python -m pytest -q` → expect **478 passed**.
-- Stage only the source + test changes, NOT the working DB or generated artifacts. Specifically commit: `backend/lifegraph/salience.py`, `backend/lifegraph/mcp_server.py`, `backend/tests/test_salience.py`, `backend/tests/test_mcp_server.py`, `task.md`. Do **not** commit `backend/lifegraph.db`, `*.db-shm`, `*.db-wal`, or `backend/my_table_data.csv` (these are local dogfood state — leave them out; consider adding them to `.gitignore` in this commit).
-- Message: `feat: drop third-party observations lacking a first-person reference`.
+The salience filter and its measurable exit criterion are built and green. Recap so nothing gets re-derived:
 
-**Step B — DONE.** Committed `e8956bc`.
-- `backend/tests/salience_corpus.py`: 54 hand-labeled examples across 8 categories (empty, question, hypothetical, command, code, third_party, user_fact, ambiguous_first_person).
-- `backend/tests/test_salience_corpus.py`: confusion matrix, zero-false-KEEP invariant, KEEP recall ≥ 0.80, DROP recall ≥ 0.90.
-- Baseline (479 tests pass): **100% precision/recall on all three classes.** Exit criterion is now concrete: zero false auto-KEEPs on real traffic and recall floors holding on the expanded corpus.
+**Salience filter (`salience.py`).** Pure classifier `classify(sentence, ProposedGraph) -> SalienceVerdict` returning KEEP / HOLD / DROP. v1 = cheap heuristics:
+- **DROP**: empty extraction; questions (`?` or interrogative opener); hypotheticals (`what if`, `suppose`…); assistant commands (`can you`, `please fix`…); code (fences or dense punctuation); **no first-person reference at all** (third-party/general claims like "Ollama is a popular runtime").
+- **KEEP**: first-person stative (`I use`, `my setup`…) **and** a user-relevant node type (Tool/Model/Hardware/Project/Skill/Goal/Habit/Technology/Program).
+- **HOLD**: first-person reference and parsed into something, but not a clear stative user fact (e.g. "I tried Ollama briefly"). Conservative on purpose — ambiguous goes to HOLD, never auto-KEEP. Contract is transport-agnostic so an LLM judge can replace it later without touching callers.
 
-**Step C — Live dogfooding (DEFERRED until Ollama is running; do not attempt headless).**
-- Requires `ollama serve` up on `127.0.0.1:11434` with `LIFEGRAPH_MODEL` pulled. Run `python -m lifegraph.mcp_server`, push real Claude Code / Desktop sentences through `add_observation`, inspect the hold queue with `list_held`, and compare observed keep/hold/drop rates against the Step-B baseline. Feed any new misclassified real sentences back into the corpus (Step B1) — that's how the test set grows teeth.
-- Exit criterion (now concrete, from Step B): zero false auto-KEEPs on real traffic and the soft floors holding on the expanded corpus.
+**Store/MCP wiring.** `store.py` + `domain.py` — `held_observations` table (migration `_migrate_3`, `SCHEMA_VERSION` 3→4); `hold_observation` / `list_held` / `get_held` / `resolve_held`; `proposal_to_dict` / `proposal_from_dict` so a held proposal is stored verbatim and re-appliable. `mcp_server.py` — `add_observation` classifies before persisting and returns `{status: kept|held|dropped|error, …}`; KEEP persists + records provenance, HOLD queues, DROP discards, failures return a structured status. `list_held` + `review_held(held_id, "keep"|"drop")` MCP tools are the seed of the review queue.
 
-**Deferred decisions (do NOT act on these yet — they wait for dogfooding evidence):** heuristics-only vs. LLM judge (§8); review cadence (§8); whether to also gate the HTTP `/api/parse` path (currently MCP-only, since the web path already has per-parse human confirmation).
+**Step A — DONE.** Committed the first-person-gating refinement (`feat: drop third-party observations lacking a first-person reference`).
 
-Do NOT start the log ingestor, retrieval ranking, or any UI polish. Salience gate first — everything downstream depends on the graph being clean.
+**Step B — DONE.** Committed `e8956bc`. `salience_corpus.py`: 54 hand-labeled examples across 8 categories. `test_salience_corpus.py`: confusion matrix, zero-false-KEEP invariant, KEEP recall ≥ 0.80, DROP recall ≥ 0.90. Baseline (**479 tests pass**): 100% precision/recall on all three classes.
+
+**Step C — SUBSUMED by the dry-run ingestor above.** The original plan was slow hand-fed live dogfooding through `add_observation`. The dry-run ingestor tests the *same* exit criterion (zero false auto-KEEPs on real traffic) against the whole on-disk backlog at once, so it replaces Step C rather than waiting behind it. Live `add_observation` dogfooding still happens continuously in the background once Ollama is up; it's no longer the gating exit path.
+
+**Deferred decisions (do NOT act on these yet — they wait for the dry-run's evidence):** heuristics-only vs. LLM judge (§8); review cadence (§8); whether to also gate the HTTP `/api/parse` path (currently MCP-only, since the web path already has per-parse human confirmation); ingestor persistence + dedup-on-write (flip on *after* the dry-run report is clean).
+
+Do NOT flip on persistence, build retrieval ranking, or build the review UI yet — the dry-run report decides which of those comes first.
 
 ---
 
@@ -146,5 +157,5 @@ Do NOT start the log ingestor, retrieval ranking, or any UI polish. Salience gat
 - **Retrieval relevance signal:** graph proximity only, embeddings, recency, or a blend? Where do embeddings live given the local-only constraint?
 - **Injection mechanism for non-MCP tools:** clipboard copy, a file the tool reads, or a browser extension? (Deferred until cross-tool is proven worth it.)
 - **De-dupe across paraphrases:** identity is `(normalize(label), type)`, but passive extraction will produce many near-synonyms ("3090" vs "RTX 3090" vs "my GPU"). Do we need entity resolution beyond exact-normalized match?
-- **Privacy boundary for log ingestion:** do we extract from *all* Claude Code sessions, or let the user scope which projects/sessions are eligible?
-- **Salience ground truth:** how do you build a test set to know if your salience filter is working? Without this, Month 1's "dogfood and eyeball" has no exit criterion.
+- **Privacy boundary for log ingestion:** do we extract from *all* Claude Code sessions, or let the user scope which projects/sessions are eligible? *(Moot for the local dry-run; becomes live the moment ingestor persistence is flipped on — leave a scoping hook.)*
+- **Salience ground truth:** ~~how do you build a test set to know if your salience filter is working?~~ *Largely answered: Step B's hand-labeled `salience_corpus.py` is the ground-truth set; the dry-run ingestor extends it with real-traffic samples. Remaining open part: when is the corpus "big/representative enough" to trust auto-KEEP unsupervised?*
