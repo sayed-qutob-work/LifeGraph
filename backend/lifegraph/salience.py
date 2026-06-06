@@ -158,15 +158,25 @@ _FIRST_PERSON_STATIVE: tuple[str, ...] = (
     "i build",
     "i'm building",
     "im building",
+    "i am building",
     "i switched",
     "i moved to",
     "i work with",
     "i work on",
     "i'm working on",
     "im working on",
+    "i am working on",
     "i set up",
     "i installed",
     "i configured",
+    "i maintain",
+    "i practice",
+    "i developed",
+    "i develop",
+    "i value",
+    "i speak",
+    "i am based",
+    "i study",
     "my setup",
     "my machine",
     "my gpu",
@@ -175,6 +185,8 @@ _FIRST_PERSON_STATIVE: tuple[str, ...] = (
     "my model",
     "my workflow",
     "my stack",
+    "my desktop",
+    "my computer",
 )
 
 # Broad first-person markers used to detect whether a sentence is about the
@@ -191,11 +203,11 @@ _FIRST_PERSON_ANY: tuple[str, ...] = (
     " mine",
 )
 
-# Handles "my main project", "my side project", "my current model", etc.
-# The exact-substring list misses an adjective inserted between "my" and the noun.
+# Handles "my main project", "my primary active project", etc.
+# The exact-substring list misses adjectives between "my" and the noun.
 _MY_ADJ_NOUN = re.compile(
-    r"my\s+\w+\s+"
-    r"(project|workflow|stack|setup|machine|gpu|laptop|model)\b"
+    r"my\s+\w+\s+(?:\w+\s+)?"
+    r"(project|workflow|stack|setup|machine|gpu|laptop|model|desktop|computer)\b"
 )
 
 # A rough "this looks like code" detector: fenced blocks, or a high density of

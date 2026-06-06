@@ -63,6 +63,10 @@ def _person(label: str = "Alice") -> ProposedGraph:
     return ProposedGraph(nodes=[_node(label, NodeType.PERSON)], edges=[])
 
 
+def _habit(label: str = "step-by-step review") -> ProposedGraph:
+    return ProposedGraph(nodes=[_node(label, NodeType.HABIT)], edges=[])
+
+
 KEEP = SalienceDecision.KEEP
 HOLD = SalienceDecision.HOLD
 DROP = SalienceDecision.DROP
@@ -124,7 +128,7 @@ CORPUS: list[CorpusEntry] = [
     CorpusEntry("Most developers prefer REST over GraphQL.", _technology(), DROP, "third_party"),
     CorpusEntry("Claude is good at coding tasks.", _tool(), DROP, "third_party"),
 
-    # ── user_fact (16) ────────────────────────────────────────────────────
+    # ── user_fact (26) ────────────────────────────────────────────────────
     # First-person stative + user-relevant type → stable fact → KEEP.
     CorpusEntry("I use Ollama for local inference", _tool(), KEEP, "user_fact"),
     CorpusEntry("I'm running llama3 on my machine", _model(), KEEP, "user_fact"),
@@ -140,9 +144,18 @@ CORPUS: list[CorpusEntry] = [
     CorpusEntry("I've been using Python for years", _skill(), KEEP, "user_fact"),
     CorpusEntry("My GPU is an RTX 3090", _hardware(), KEEP, "user_fact"),
     CorpusEntry("I configured my Ollama to use llama3", _tool(), KEEP, "user_fact"),
-    # Adjective between "my" and the noun — caught by the _MY_ADJ_NOUN regex.
+    # Adjective(s) between "my" and the noun — caught by the _MY_ADJ_NOUN regex.
     CorpusEntry("My main project right now is LifeGraph", _project(), KEEP, "user_fact"),
     CorpusEntry("My current model is llama3", _model(), KEEP, "user_fact"),
+    CorpusEntry("My primary active project is LifeGraph", _project(), KEEP, "user_fact"),
+    CorpusEntry("My desktop PC runs Windows", _hardware(), KEEP, "user_fact"),
+    # New stative verbs added from dogfooding (i am building, i maintain, i practice, etc).
+    CorpusEntry("I am building LifeGraph as a knowledge graph tool", _project(), KEEP, "user_fact"),
+    CorpusEntry("I maintain the Al-Salam Woodwork website", _project(), KEEP, "user_fact"),
+    CorpusEntry("I practice cybersecurity on TryHackMe", _tool(), KEEP, "user_fact"),
+    CorpusEntry("I developed an Arabic disinformation detector", _project(), KEEP, "user_fact"),
+    CorpusEntry("I value step-by-step approval in my workflow", _habit(), KEEP, "user_fact"),
+    CorpusEntry("I speak Arabic and English", _skill(), KEEP, "user_fact"),
 
     # ── ambiguous_first_person (7) ────────────────────────────────────────
     # Has a first-person reference and parsed into something, but the verb is
