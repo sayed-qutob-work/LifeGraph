@@ -41,6 +41,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
+import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -248,8 +250,13 @@ def run_ingest(
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     limit: int | None = None,
     projects: Sequence[str] = (),
+    output_path: Path | None = None,
 ) -> IngestReport:
     """Walk the backlog and classify every candidate. Never writes to the DB.
+
+    Each verdict is appended to ``output_path`` (one JSON line, flushed
+    immediately) so progress survives a kill or power-off. Pass
+    ``output_path=None`` to skip file output.
 
     Args:
         parser: A ready ``InputParser`` (from ``factory.make_parser``).
@@ -258,6 +265,7 @@ def run_ingest(
         limit: Stop after this many candidates (a quick smoke cap); None = all.
         projects: Case-insensitive path substrings to scope which sessions are
             eligible (the privacy-scoping hook). Empty = every session.
+        output_path: JSONL file to append each verdict to immediately.
 
     Raises:
         OllamaUnavailableError / OllamaTimeoutError: if the LLM is unreachable —
@@ -267,19 +275,86 @@ def run_ingest(
     report = IngestReport()
     files = [p for p in iter_session_files(root) if _matches_project(p, projects)]
     report.files_scanned = len(files)
+    sys.stderr.write(f"[ingest] {len(files)} session files found\n")
+    if output_path:
+        sys.stderr.write(f"[ingest] writing results to {output_path}\n")
+    sys.stderr.flush()
 
-    for path in files:
-        for candidate in iter_file_candidates(path):
-            bucket, reason, signals = classify_candidate(candidate, parser)
+    start = time.monotonic()
+
+    out = open(output_path, "a", encoding="utf-8") if output_path else None
+    try:
+        for file_idx, path in enumerate(files, 1):
+            for candidate in iter_file_candidates(path):
+                bucket, reason, signals = classify_candidate(candidate, parser)
+                report.total_candidates += 1
+                report.decisions[bucket] += 1
+                if bucket == "dropped":
+                    report.drop_reasons.update(signals)
+                bucket_samples = report.samples[bucket]
+                if len(bucket_samples) < sample_size:
+                    bucket_samples.append((candidate.sentence, reason, path.stem))
+                if out is not None:
+                    out.write(json.dumps({
+                        "sentence": candidate.sentence,
+                        "bucket": bucket,
+                        "reason": reason,
+                        "signals": signals,
+                        "source": path.stem,
+                    }) + "\n")
+                    out.flush()
+                if report.total_candidates % 10 == 0:
+                    elapsed = time.monotonic() - start
+                    rate = (report.total_candidates / elapsed * 60) if elapsed > 0 else 0
+                    k = report.decisions.get("kept", 0)
+                    h = report.decisions.get("held", 0)
+                    d = report.decisions.get("dropped", 0)
+                    preview = candidate.sentence[:55].replace("\n", " ")
+                    sys.stderr.write(
+                        f"[{report.total_candidates}] file={file_idx}/{len(files)}"
+                        f"  kept={k} held={h} dropped={d}"
+                        f"  {rate:.1f}/min"
+                        f"  +{elapsed:.0f}s"
+                        f"  | {preview}\n"
+                    )
+                    sys.stderr.flush()
+                if limit is not None and report.total_candidates >= limit:
+                    return report
+    finally:
+        if out is not None:
+            out.close()
+    return report
+
+
+def report_from_file(results_path: Path, sample_size: int = DEFAULT_SAMPLE_SIZE) -> IngestReport:
+    """Rebuild an IngestReport from a saved results JSONL file.
+
+    Lets you generate (or regenerate) the summary report from a partial or
+    complete run without re-running the LLM.
+    """
+    report = IngestReport()
+    with results_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            bucket = rec.get("bucket", "dropped")
+            reason = rec.get("reason", "")
+            signals = rec.get("signals", [])
+            sentence = rec.get("sentence", "")
+            source = rec.get("source", "")
             report.total_candidates += 1
             report.decisions[bucket] += 1
             if bucket == "dropped":
                 report.drop_reasons.update(signals)
-            bucket_samples = report.samples[bucket]
+            bucket_samples = report.samples.get(bucket, [])
             if len(bucket_samples) < sample_size:
-                bucket_samples.append((candidate.sentence, reason, path.stem))
-            if limit is not None and report.total_candidates >= limit:
-                return report
+                bucket_samples.append((sentence, reason, source))
+                report.samples[bucket] = bucket_samples
     return report
 
 

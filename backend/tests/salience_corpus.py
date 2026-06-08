@@ -161,6 +161,15 @@ CORPUS: list[CorpusEntry] = [
     # Has a first-person reference and parsed into something, but the verb is
     # not a stative marker → not safe to auto-KEEP → HOLD for review.
     CorpusEntry("I tried Ollama briefly", _tool(), HOLD, "ambiguous_first_person"),
+    # Regression: "i've" was too broad as a standalone stative cue — this
+    # conversational aside was falsely KEEPed during the first real-backlog
+    # smoke pass (2026-06-06). Must stay HOLD after the fix.
+    CorpusEntry(
+        "I've already done one round of product critique and landed on the following:",
+        _project(),
+        HOLD,
+        "ambiguous_first_person",
+    ),
     CorpusEntry("I met Alice yesterday", _person(), HOLD, "ambiguous_first_person"),
     CorpusEntry("I asked about llama3 earlier", _model(), HOLD, "ambiguous_first_person"),
     CorpusEntry("I recently experimented with Ollama", _tool(), HOLD, "ambiguous_first_person"),

@@ -109,18 +109,28 @@ The remaining tension is *ordering* — does the JSONL ingestor come before the 
 3. **It sizes the opportunity before you invest.** Does your backlog even clear ~300 quality facts? If not, the moat thesis needs rethinking — cheap to learn now.
 4. **It's not throwaway.** Log-walking + extraction is ~80% of the real ingestor. You flip persistence on once the dry-run looks clean.
 
-**Deliverable — `ingest.py`:**
-- A walker over `~/.claude/projects/**/*.jsonl` (resolve `~` per-OS; the path is under the user's home, not the repo) that yields candidate user sentences from each session record.
-- Reuse the real pipeline: `factory.make_parser` → `parser.parse(sentence)` → `salience.classify(sentence, proposed)`. Do **not** fork or reimplement either; if the parser needs adapting for batch use, adapt it in place so live `add_observation` and the ingestor stay identical.
-- Output: a printed confusion-style report — counts of KEEP/HOLD/DROP, the DROP-reason breakdown (question / hypothetical / command / code / no-first-person / empty), and N sampled sentences per verdict so you can eyeball false KEEPs by hand.
-- A `--dry-run` default that is the *only* mode for now; persistence is a deliberately separate, later flip (do not add it in this task).
-- Tests in the same style as the rest of the suite (parse the report counts off a small fixture of synthetic JSONL; no network, no real `~/.claude`).
+### Status: scaffolded and green. **493 tests pass** (479 baseline + 14 new). One step remains: the real-backlog run, which is gated on Ollama.
 
-**Exit criterion:** the report runs end-to-end over your real backlog and shows **zero false auto-KEEPs** on a hand-inspected sample, with the KEEP/DROP recall floors from Step B holding. Feed any misclassified real sentence back into `salience_corpus.py` — that's how the corpus grows teeth.
+**Scaffolded (`backend/lifegraph/ingest.py`):**
+- `iter_session_files` / `iter_file_candidates` — walks `~/.claude/projects/**/*.jsonl`; keeps only `type=="user"` / `role=="user"` / **string** content; skips tool-result lists and `<command-name>` / `<local-command-caveat>` machinery; tolerates malformed lines.
+- `classify_candidate` — calls the real `parser.parse` then `salience.classify`, with the same error handling `add_observation` uses: parse/input errors → `dropped`; Ollama errors propagate and abort the run with an actionable message. No fork, no reimplementation.
+- `format_report` — prints KEEP/HOLD/DROP counts + share, drop-reason breakdown, and N sampled sentences per verdict (ASCII-only; Unicode caused a cp1252 crash on Windows that was caught and fixed).
+- CLI: `python -m lifegraph.ingest` with `--root`, `--sample`, `--limit` (quick smoke cap), and `--project` (the §8 privacy-scoping hook — moot for a dry-run, live once persistence flips on).
+- `tests/test_ingest.py` — 14 fixture-based tests (synthetic JSONL + keyword-driven fake parser; no network, no real `~/.claude`).
 
-**Caveats:**
-- **Needs Ollama up** (`ollama serve` on `127.0.0.1:11434` with `LIFEGRAPH_MODEL` pulled) — same blocker as Step C, since `parser.parse` calls the LLM. Do not attempt the real-backlog run headless; the *code + fixture tests* can be written and run without Ollama.
-- Touches the **privacy-scoping** open question (§8: ingest all sessions vs. let the user scope projects). Moot for a local dry-run on your own machine — but it becomes real the moment persistence is flipped on, so leave a hook for project/session scoping; don't solve it now.
+**Remaining step — real-backlog run (Ollama-gated):**
+Start Ollama (`ollama serve`, `127.0.0.1:11434`, `LIFEGRAPH_MODEL` pulled), then:
+```
+cd backend
+python -m lifegraph.ingest --limit 50    # fast smoke pass first
+python -m lifegraph.ingest               # full backlog
+```
+Eyeball the KEEP sample for false auto-KEEPs. Feed any misclassified sentence back into `salience_corpus.py`. The run also answers the two structural questions (ingestor-vs-review-UI ordering; does the backlog clear ~300 quality facts):
+- **auto-KEEP trustworthy + HOLD pile small** → flip persistence on next, defer review view.
+- **HOLD pile large** → build the review view first.
+- **KEEP count well below ~300** → revisit the moat thesis before investing in persistence.
+
+Note: KEEP count is sentences-that-would-keep, not unique facts (repeated pasted prompts inflate it). Treat it as an upper bound on quality facts until dedup-across-paraphrases (§8) is solved.
 
 ---
 
