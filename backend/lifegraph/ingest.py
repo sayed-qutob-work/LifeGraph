@@ -137,7 +137,8 @@ class Candidate:
 class IngestReport:
     """Aggregate verdicts from a dry-run pass — counts and samples, no rows."""
 
-    files_scanned: int = 0
+    files_scanned: int = 0           # Claude Code session files
+    conversations_scanned: int = 0   # claude.ai export conversations
     total_candidates: int = 0
     duplicates_skipped: int = 0
     # bucket ("kept"|"held"|"dropped") -> count
@@ -271,6 +272,52 @@ def split_sentences(text: str) -> Iterator[str]:
 
 
 # ---------------------------------------------------------------------------
+# claude.ai export reader
+# ---------------------------------------------------------------------------
+
+
+def _iter_export_from_conversations(conversations: list) -> Iterator[Candidate]:
+    """Yield Candidates from a pre-loaded claude.ai conversations list.
+
+    Only ``sender == "human"`` messages are considered. The top-level ``text``
+    field on each message is used directly (it equals the joined text-type
+    content blocks and is always a plain string in the claude.ai export format).
+    """
+    for conv in conversations:
+        if not isinstance(conv, dict):
+            continue
+        conv_uuid = conv.get("uuid") or "unknown"
+        source = Path(conv_uuid)
+        for msg in (conv.get("chat_messages") or []):
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("sender") != "human":
+                continue
+            text = (msg.get("text") or "").strip()
+            if not text:
+                continue
+            for sentence in split_sentences(text):
+                if _is_prose_sentence(sentence):
+                    yield Candidate(sentence=sentence, source=source)
+
+
+def iter_export_candidates(conversations_path: Path) -> Iterator[Candidate]:
+    """Yield Candidates from a claude.ai ``conversations.json`` export file.
+
+    Reads the file once; skips it gracefully on IO or JSON errors. Delegates
+    extraction to ``_iter_export_from_conversations`` so the inner logic can be
+    tested without touching the filesystem.
+    """
+    try:
+        with conversations_path.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return
+    if isinstance(data, list):
+        yield from _iter_export_from_conversations(data)
+
+
+# ---------------------------------------------------------------------------
 # Classification (mirrors add_observation's parse + salience, minus persistence)
 # ---------------------------------------------------------------------------
 
@@ -310,6 +357,7 @@ def run_ingest(
     limit: int | None = None,
     projects: Sequence[str] = (),
     exclude: Sequence[str] = (),
+    export_path: Path | None = None,
     output_path: Path | None = None,
 ) -> IngestReport:
     """Walk the backlog and classify every candidate. Never writes to the DB.
@@ -318,8 +366,10 @@ def run_ingest(
     immediately) so progress survives a kill or power-off. Pass
     ``output_path=None`` to skip file output.
 
-    Duplicate sentences (same normalised text seen in any prior file) are
-    counted in ``report.duplicates_skipped`` and not sent to the LLM.
+    Duplicate sentences (same normalised text seen in any prior source) are
+    counted in ``report.duplicates_skipped`` and not sent to the LLM. Dedup
+    spans both the Claude Code sessions and the export so the same sentence
+    is never classified twice even if it appears in both sources.
 
     Args:
         parser: A ready ``InputParser`` (from ``factory.make_parser``).
@@ -330,6 +380,9 @@ def run_ingest(
             eligible (the privacy-scoping hook). Empty = every session.
         exclude: Case-insensitive path substrings; matching sessions are always
             skipped even if they also match ``projects``.
+        export_path: Path to a claude.ai ``conversations.json`` export file.
+            When provided, its human messages are classified after the Claude
+            Code sessions, using the same dedup set.
         output_path: JSONL file to append each verdict to immediately.
 
     Raises:
@@ -343,57 +396,77 @@ def run_ingest(
         if _matches_project(p, projects, exclude)
     ]
     report.files_scanned = len(files)
+
+    # Load the export up front so we know the conversation count before starting.
+    export_convs: list = []
+    if export_path is not None:
+        try:
+            with export_path.open(encoding="utf-8") as fh:
+                _data = json.load(fh)
+            if isinstance(_data, list):
+                export_convs = _data
+        except (OSError, json.JSONDecodeError) as exc:
+            sys.stderr.write(f"[ingest] warning: cannot read export: {exc}\n")
+        report.conversations_scanned = len(export_convs)
+
     sys.stderr.write(f"[ingest] {len(files)} session files found\n")
+    if export_convs:
+        sys.stderr.write(f"[ingest] {len(export_convs)} conversations in export\n")
     if output_path:
         sys.stderr.write(f"[ingest] writing results to {output_path}\n")
     sys.stderr.flush()
+
+    def _all_candidates() -> Iterator[Candidate]:
+        for path in files:
+            yield from iter_file_candidates(path)
+        if export_convs:
+            yield from _iter_export_from_conversations(export_convs)
 
     start = time.monotonic()
     seen_normalized: set[str] = set()
 
     out = open(output_path, "a", encoding="utf-8") if output_path else None
     try:
-        for file_idx, path in enumerate(files, 1):
-            for candidate in iter_file_candidates(path):
-                norm = candidate.sentence.strip().casefold()
-                if norm in seen_normalized:
-                    report.duplicates_skipped += 1
-                    continue
-                seen_normalized.add(norm)
-                bucket, reason, signals = classify_candidate(candidate, parser)
-                report.total_candidates += 1
-                report.decisions[bucket] += 1
-                if bucket == "dropped":
-                    report.drop_reasons.update(signals)
-                bucket_samples = report.samples[bucket]
-                if len(bucket_samples) < sample_size:
-                    bucket_samples.append((candidate.sentence, reason, path.stem))
-                if out is not None:
-                    out.write(json.dumps({
-                        "sentence": candidate.sentence,
-                        "bucket": bucket,
-                        "reason": reason,
-                        "signals": signals,
-                        "source": path.stem,
-                    }) + "\n")
-                    out.flush()
-                if report.total_candidates % 10 == 0:
-                    elapsed = time.monotonic() - start
-                    rate = (report.total_candidates / elapsed * 60) if elapsed > 0 else 0
-                    k = report.decisions.get("kept", 0)
-                    h = report.decisions.get("held", 0)
-                    d = report.decisions.get("dropped", 0)
-                    preview = candidate.sentence[:55].replace("\n", " ")
-                    sys.stderr.write(
-                        f"[{report.total_candidates}] file={file_idx}/{len(files)}"
-                        f"  kept={k} held={h} dropped={d}"
-                        f"  {rate:.1f}/min"
-                        f"  +{elapsed:.0f}s"
-                        f"  | {preview}\n"
-                    )
-                    sys.stderr.flush()
-                if limit is not None and report.total_candidates >= limit:
-                    return report
+        for candidate in _all_candidates():
+            norm = candidate.sentence.strip().casefold()
+            if norm in seen_normalized:
+                report.duplicates_skipped += 1
+                continue
+            seen_normalized.add(norm)
+            bucket, reason, signals = classify_candidate(candidate, parser)
+            report.total_candidates += 1
+            report.decisions[bucket] += 1
+            if bucket == "dropped":
+                report.drop_reasons.update(signals)
+            bucket_samples = report.samples[bucket]
+            if len(bucket_samples) < sample_size:
+                bucket_samples.append((candidate.sentence, reason, candidate.source.stem))
+            if out is not None:
+                out.write(json.dumps({
+                    "sentence": candidate.sentence,
+                    "bucket": bucket,
+                    "reason": reason,
+                    "signals": signals,
+                    "source": candidate.source.stem,
+                }) + "\n")
+                out.flush()
+            if report.total_candidates % 10 == 0:
+                elapsed = time.monotonic() - start
+                rate = (report.total_candidates / elapsed * 60) if elapsed > 0 else 0
+                k = report.decisions.get("kept", 0)
+                h = report.decisions.get("held", 0)
+                d = report.decisions.get("dropped", 0)
+                preview = candidate.sentence[:55].replace("\n", " ")
+                sys.stderr.write(
+                    f"[{report.total_candidates}]"
+                    f"  kept={k} held={h} dropped={d}"
+                    f"  {rate:.1f}/min"
+                    f"  +{elapsed:.0f}s"
+                    f"  | {preview}\n"
+                )
+                sys.stderr.flush()
+            if limit is not None and report.total_candidates >= limit:
+                return report
     finally:
         if out is not None:
             out.close()
@@ -454,7 +527,10 @@ def format_report(report: IngestReport, sample_size: int = DEFAULT_SAMPLE_SIZE) 
     lines.append(bar)
     lines.append("LifeGraph ingest - DRY RUN (no database writes)")
     lines.append(bar)
-    lines.append(f"files scanned:  {report.files_scanned}")
+    if report.files_scanned:
+        lines.append(f"CC sessions:    {report.files_scanned}")
+    if report.conversations_scanned:
+        lines.append(f"conversations:  {report.conversations_scanned}  (claude.ai export)")
     lines.append(f"candidates:     {total}")
     if report.duplicates_skipped:
         lines.append(f"deduped:        {report.duplicates_skipped}  (skipped — same sentence seen before)")
@@ -558,6 +634,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--export",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to a claude.ai ``conversations.json`` export file. "
+            "Human messages are classified after the Claude Code sessions, "
+            "sharing the same dedup set. Use instead of --root when you only "
+            "have export data (e.g. --export ~/Downloads/conversations.json)."
+        ),
+    )
+    parser.add_argument(
         "--report-only",
         type=Path,
         default=None,
@@ -599,6 +687,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             projects=args.project,
             exclude=args.exclude,
+            export_path=args.export,
             output_path=args.output,
         )
     except (OllamaUnavailableError, OllamaTimeoutError) as exc:

@@ -19,8 +19,10 @@ from lifegraph.ingest import (
     Candidate,
     IngestReport,
     _is_prose_sentence,
+    _iter_export_from_conversations,
     classify_candidate,
     format_report,
+    iter_export_candidates,
     iter_file_candidates,
     iter_session_files,
     report_from_file,
@@ -452,3 +454,182 @@ def test_format_report_shows_deduped_count():
     text = format_report(report)
     assert "deduped" in text
     assert "5" in text
+
+
+# ---------------------------------------------------------------------------
+# claude.ai export reader
+# ---------------------------------------------------------------------------
+
+
+def _make_human_msg(text: str, uuid: str = "m1") -> dict:
+    return {
+        "uuid": uuid, "text": text, "content": [],
+        "sender": "human", "created_at": "", "updated_at": "",
+        "attachments": [], "files": [], "parent_message_uuid": None,
+    }
+
+
+def _make_assistant_msg(text: str) -> dict:
+    return {
+        "uuid": "a1", "text": text, "content": [],
+        "sender": "assistant", "created_at": "", "updated_at": "",
+        "attachments": [], "files": [], "parent_message_uuid": None,
+    }
+
+
+def _make_conv(uuid: str, messages: list) -> dict:
+    return {
+        "uuid": uuid, "name": "test conv", "summary": "",
+        "created_at": "", "updated_at": "", "account": {},
+        "chat_messages": messages,
+    }
+
+
+def _write_export(path: Path, conversations: list) -> None:
+    path.write_text(json.dumps(conversations), encoding="utf-8")
+
+
+def test_export_reader_yields_human_prose():
+    convs = [
+        _make_conv("conv-1", [
+            _make_human_msg("I use Ollama for local inference."),
+            _make_assistant_msg("Great, I can help with that."),
+            _make_human_msg("My GPU is an RTX 3090."),
+        ]),
+    ]
+    candidates = list(_iter_export_from_conversations(convs))
+    sentences = [c.sentence for c in candidates]
+    assert "I use Ollama for local inference." in sentences
+    assert "My GPU is an RTX 3090." in sentences
+    # assistant message must be excluded
+    assert not any("Great" in s for s in sentences)
+
+
+def test_export_reader_skips_assistant_messages():
+    convs = [
+        _make_conv("conv-1", [
+            _make_assistant_msg("Here is some information."),
+            _make_assistant_msg("Let me explain further."),
+        ]),
+    ]
+    assert list(_iter_export_from_conversations(convs)) == []
+
+
+def test_export_reader_applies_prose_filter():
+    convs = [
+        _make_conv("conv-1", [
+            _make_human_msg("I use Ollama for local inference."),        # passes
+            _make_human_msg("- some markdown bullet point"),              # rejected
+            _make_human_msg("Call add_observation with the sentence: x"), # rejected
+        ]),
+    ]
+    sentences = [c.sentence for c in _iter_export_from_conversations(convs)]
+    assert sentences == ["I use Ollama for local inference."]
+
+
+def test_export_reader_splits_multi_sentence_messages():
+    convs = [
+        _make_conv("conv-1", [
+            _make_human_msg("I use Ollama daily. My GPU is an RTX 3090."),
+        ]),
+    ]
+    sentences = [c.sentence for c in _iter_export_from_conversations(convs)]
+    assert len(sentences) == 2
+    assert "I use Ollama daily." in sentences
+    assert "My GPU is an RTX 3090." in sentences
+
+
+def test_export_reader_source_is_conversation_uuid():
+    convs = [_make_conv("abc-123", [_make_human_msg("I use Ollama.")])]
+    candidates = list(_iter_export_from_conversations(convs))
+    assert candidates[0].source == Path("abc-123")
+
+
+def test_export_reader_handles_empty_and_malformed():
+    assert list(_iter_export_from_conversations([])) == []
+    assert list(_iter_export_from_conversations([None, "bad", 42])) == []
+
+
+def test_iter_export_candidates_reads_file(tmp_path: Path):
+    export = tmp_path / "conversations.json"
+    convs = [_make_conv("c1", [_make_human_msg("I use Ollama for local inference.")])]
+    _write_export(export, convs)
+    sentences = [c.sentence for c in iter_export_candidates(export)]
+    assert sentences == ["I use Ollama for local inference."]
+
+
+def test_iter_export_candidates_bad_path_is_empty(tmp_path: Path):
+    assert list(iter_export_candidates(tmp_path / "missing.json")) == []
+
+
+def test_iter_export_candidates_bad_json_is_empty(tmp_path: Path):
+    bad = tmp_path / "bad.json"
+    bad.write_text("not json {{{", encoding="utf-8")
+    assert list(iter_export_candidates(bad)) == []
+
+
+# ---------------------------------------------------------------------------
+# run_ingest with export_path
+# ---------------------------------------------------------------------------
+
+
+def test_run_ingest_export_classifies_candidates(tmp_path: Path):
+    export = tmp_path / "conversations.json"
+    convs = [
+        _make_conv("c1", [
+            _make_human_msg("I use Ollama for local inference."),  # keep
+            _make_human_msg("What time is it?"),                   # drop (question)
+        ]),
+    ]
+    _write_export(export, convs)
+    # Empty Claude Code root so only export data flows through.
+    empty_root = tmp_path / "empty_projects"
+    empty_root.mkdir()
+
+    report = run_ingest(FakeParser(), root=empty_root, export_path=export)
+
+    assert report.conversations_scanned == 1
+    assert report.total_candidates == 2
+    assert report.decisions["kept"] == 1
+    assert report.decisions["dropped"] == 1
+
+
+def test_run_ingest_export_dedup_spans_both_sources(tmp_path: Path):
+    # Same sentence in a CC session and the export → counted only once.
+    root = tmp_path / "projects"
+    (root / "proj").mkdir(parents=True)
+    _write_jsonl(root / "proj" / "s.jsonl", [_user_record("I use Ollama daily.")])
+
+    export = tmp_path / "conversations.json"
+    convs = [_make_conv("c1", [_make_human_msg("I use Ollama daily.")])]
+    _write_export(export, convs)
+
+    report = run_ingest(FakeParser(), root=root, export_path=export)
+
+    assert report.total_candidates == 1
+    assert report.duplicates_skipped == 1
+
+
+def test_run_ingest_conversations_scanned_zero_without_export(tmp_path: Path):
+    root = _seed_backlog(tmp_path)
+    report = run_ingest(FakeParser(), root=root)
+    assert report.conversations_scanned == 0
+
+
+def test_format_report_shows_conversations_when_nonzero():
+    report = IngestReport()
+    report.conversations_scanned = 192
+    report.total_candidates = 50
+    report.decisions.update({"kept": 50})
+    text = format_report(report)
+    assert "conversations" in text
+    assert "192" in text
+
+
+def test_format_report_hides_conversations_when_zero():
+    report = IngestReport()
+    report.files_scanned = 5
+    report.total_candidates = 10
+    report.decisions.update({"kept": 10})
+    text = format_report(report)
+    assert "conversations" not in text
