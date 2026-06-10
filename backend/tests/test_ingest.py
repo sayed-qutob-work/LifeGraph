@@ -18,10 +18,12 @@ from lifegraph.domain import NodeType, ProposedGraph, ProposedNode
 from lifegraph.ingest import (
     Candidate,
     IngestReport,
+    _is_prose_sentence,
     classify_candidate,
     format_report,
     iter_file_candidates,
     iter_session_files,
+    report_from_file,
     run_ingest,
     split_sentences,
 )
@@ -246,6 +248,48 @@ def test_run_ingest_sample_size_bounds_samples(tmp_path: Path):
         assert len(report.samples[bucket]) <= 1
 
 
+def test_run_ingest_writes_output_file_immediately(tmp_path: Path):
+    root = _seed_backlog(tmp_path)
+    out = tmp_path / "results.jsonl"
+    run_ingest(FakeParser(), root=root, output_path=out)
+
+    assert out.exists()
+    lines = [l for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 4  # one line per candidate
+    # every line is valid JSON with the expected fields
+    for line in lines:
+        rec = json.loads(line)
+        assert rec["bucket"] in ("kept", "held", "dropped")
+        assert "sentence" in rec and "reason" in rec and "source" in rec
+
+
+def test_report_from_file_rebuilds_correctly(tmp_path: Path):
+    root = _seed_backlog(tmp_path)
+    out = tmp_path / "results.jsonl"
+    original = run_ingest(FakeParser(), root=root, output_path=out)
+    rebuilt = report_from_file(out)
+
+    assert rebuilt.total_candidates == original.total_candidates
+    assert rebuilt.decisions == original.decisions
+    assert rebuilt.drop_reasons == original.drop_reasons
+
+
+def test_report_from_file_handles_partial_run(tmp_path: Path):
+    # Simulate a run killed after 2 of 4 candidates.
+    out = tmp_path / "partial.jsonl"
+    out.write_text(
+        json.dumps({"sentence": "I use Ollama.", "bucket": "kept",
+                    "reason": "stable fact", "signals": ["first_person_stative"], "source": "s1"}) + "\n" +
+        json.dumps({"sentence": "I tried it once.", "bucket": "held",
+                    "reason": "ambiguous", "signals": ["uncertain"], "source": "s1"}) + "\n",
+        encoding="utf-8",
+    )
+    report = report_from_file(out)
+    assert report.total_candidates == 2
+    assert report.decisions["kept"] == 1
+    assert report.decisions["held"] == 1
+
+
 def test_format_report_is_plain_text_and_mentions_dry_run():
     report = IngestReport()
     report.files_scanned = 1
@@ -259,3 +303,152 @@ def test_format_report_is_plain_text_and_mentions_dry_run():
     assert "kept" in text and "dropped" in text
     assert "question_mark" in text
     assert "I use Ollama." in text
+
+
+# ---------------------------------------------------------------------------
+# Prose filter (_is_prose_sentence)
+# ---------------------------------------------------------------------------
+
+
+def test_is_prose_sentence_accepts_normal_prose():
+    assert _is_prose_sentence("I use Ollama for local inference.")
+    assert _is_prose_sentence("My GPU is an RTX 3090.")
+    assert _is_prose_sentence("I've been building LifeGraph for three months.")
+    assert _is_prose_sentence("I switched from VS Code to Neovim last week.")
+
+
+def test_is_prose_sentence_rejects_too_short():
+    assert not _is_prose_sentence("")
+    assert not _is_prose_sentence("  ")
+    assert not _is_prose_sentence("1.")
+    assert not _is_prose_sentence("ok")
+
+
+def test_is_prose_sentence_rejects_db_dump_rows():
+    # UUID-prefixed lines come from pasted SELECT * output.
+    assert not _is_prose_sentence(
+        "8cdaaf53-8010-4c79-bced-980546ed4893\tI use Ollama\t2026-06-05T13:31:13Z"
+    )
+    assert not _is_prose_sentence(
+        "0c2a7e72-301f-4fed-9790-e2c088c8ddf3    My setup runs llama3 on a GPU"
+    )
+
+
+def test_is_prose_sentence_rejects_tab_structured_data():
+    assert not _is_prose_sentence("col1\tcol2\tcol3")
+    assert not _is_prose_sentence("node_id\tlabel\ttype\tcreated_at")
+
+
+def test_is_prose_sentence_rejects_markdown_bullets_and_headers():
+    assert not _is_prose_sentence("- I use Ollama on my machine.")
+    assert not _is_prose_sentence("* My GPU is a 3090.")
+    assert not _is_prose_sentence("## Setup")
+    assert not _is_prose_sentence("# Project overview")
+
+
+def test_is_prose_sentence_rejects_instruction_prefixes():
+    assert not _is_prose_sentence("Call add_observation with the sentence: I use Ollama")
+    assert not _is_prose_sentence("Capture: I run Ollama on my Windows machine")
+    assert not _is_prose_sentence("Sentence: My main CS2 goal is learning Mirage smokes.")
+    assert not _is_prose_sentence("Use the lifegraph add_observation tool to capture: ...")
+    assert not _is_prose_sentence("You paste I use an RTX 3090 → graph captures RTX 3090")
+
+
+def test_is_prose_sentence_rejects_garbled_table_rows():
+    assert not _is_prose_sentence(
+        'Questions are filtered as non-stable.2"I use VS Code."KEPTStable first-person fact.'
+    )
+    assert not _is_prose_sentence(
+        'Created: Tool node (VS Code).3"I run Ollama locally."KEPTStable fact.'
+    )
+
+
+# ---------------------------------------------------------------------------
+# iter_file_candidates respects the prose filter
+# ---------------------------------------------------------------------------
+
+
+def test_iter_file_candidates_rejects_non_prose(tmp_path: Path):
+    path = tmp_path / "s.jsonl"
+    _write_jsonl(
+        path,
+        [
+            _user_record("I use Ollama for local inference."),              # kept
+            _user_record("8cdaaf53-8010-4c79-bced    I use Ollama\t2026"), # DB dump
+            _user_record("- My GPU is a 3090."),                           # markdown bullet
+            _user_record("Call add_observation with the sentence: I use VS Code"), # instruction
+            _user_record("Sentence: My goal is learning Mirage smokes."),  # example prefix
+        ],
+    )
+    sentences = [c.sentence for c in iter_file_candidates(path)]
+    assert sentences == ["I use Ollama for local inference."]
+
+
+# ---------------------------------------------------------------------------
+# Deduplication in run_ingest
+# ---------------------------------------------------------------------------
+
+
+def test_run_ingest_deduplicates_across_files(tmp_path: Path):
+    root = tmp_path / "projects"
+    (root / "proj-a").mkdir(parents=True)
+    (root / "proj-b").mkdir(parents=True)
+    # Same sentence in two different session files.
+    _write_jsonl(root / "proj-a" / "s1.jsonl", [_user_record("I use Ollama daily.")])
+    _write_jsonl(root / "proj-b" / "s2.jsonl", [_user_record("I use Ollama daily.")])
+    # Different sentence — should still be counted.
+    _write_jsonl(root / "proj-b" / "s3.jsonl", [_user_record("My GPU is an RTX 3090.")])
+
+    report = run_ingest(FakeParser(), root=root)
+
+    assert report.total_candidates == 2        # two unique sentences
+    assert report.duplicates_skipped == 1      # one duplicate suppressed
+
+
+def test_run_ingest_dedup_is_case_insensitive(tmp_path: Path):
+    root = tmp_path / "projects"
+    (root / "proj").mkdir(parents=True)
+    _write_jsonl(
+        root / "proj" / "s.jsonl",
+        [
+            _user_record("I use Ollama daily."),
+            _user_record("I Use Ollama Daily."),   # same after casefold
+        ],
+    )
+    report = run_ingest(FakeParser(), root=root)
+    assert report.total_candidates == 1
+    assert report.duplicates_skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# --exclude filter in run_ingest
+# ---------------------------------------------------------------------------
+
+
+def test_run_ingest_exclude_skips_matching_sessions(tmp_path: Path):
+    root = _seed_backlog(tmp_path)
+    # Exclude the "lifegraph" session dir; only "other" remains.
+    report = run_ingest(FakeParser(), root=root, exclude=["lifegraph"])
+
+    assert report.files_scanned == 1
+    assert report.total_candidates == 1  # only the one sentence from "other"
+
+
+def test_run_ingest_exclude_takes_priority_over_project(tmp_path: Path):
+    root = _seed_backlog(tmp_path)
+    # --project lifegraph AND --exclude lifegraph → exclude wins, nothing scanned.
+    report = run_ingest(FakeParser(), root=root, projects=["lifegraph"], exclude=["lifegraph"])
+
+    assert report.files_scanned == 0
+    assert report.total_candidates == 0
+
+
+def test_format_report_shows_deduped_count():
+    report = IngestReport()
+    report.files_scanned = 2
+    report.total_candidates = 3
+    report.duplicates_skipped = 5
+    report.decisions.update({"kept": 3})
+    text = format_report(report)
+    assert "deduped" in text
+    assert "5" in text

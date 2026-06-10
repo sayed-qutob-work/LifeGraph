@@ -10,6 +10,7 @@ backend/__pycache__/
 backend/.env
 backend/.env.*
 *.pyc
+ingest_results.jsonl
 
 # OS/editor
 .DS_Store

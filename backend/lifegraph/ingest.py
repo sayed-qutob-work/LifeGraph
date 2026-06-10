@@ -95,6 +95,28 @@ _META_PREFIXES: tuple[str, ...] = (
 # eyeball rather than depend on perfect segmentation.
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 
+# --- Prose filter: structural patterns that rule out non-prose before parsing --
+
+# DB query output rows: lines starting with a UUID (e.g. pasted `SELECT *` results).
+_UUID_PREFIX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-", re.IGNORECASE)
+
+# Markdown list items and headings (these are doc lines, not user assertions).
+_MARKDOWN_BULLET = re.compile(r"^[-*]\s+")
+_MARKDOWN_HEADER = re.compile(r"^#+\s")
+
+# Prefixes that signal the user is directing the assistant or labelling an example,
+# not asserting a fact about themselves.
+_INSTRUCTION_PREFIXES: tuple[str, ...] = (
+    "call add_observation",
+    "capture:",
+    "sentence:",
+    "use the lifegraph",
+    "you paste",
+)
+
+# Garbled concatenated table rows (e.g. "...stable.2"I use VS Code..."KEPT...").
+_GARBLED_TABLE = re.compile(r'\d["\']|\bKEPT\b|\bHELD\b|\bDROPPED\b')
+
 DEFAULT_SAMPLE_SIZE = 5
 
 
@@ -117,6 +139,7 @@ class IngestReport:
 
     files_scanned: int = 0
     total_candidates: int = 0
+    duplicates_skipped: int = 0
     # bucket ("kept"|"held"|"dropped") -> count
     decisions: Counter = field(default_factory=Counter)
     # salience/parse signal -> count, among DROPPED candidates only
@@ -139,16 +162,51 @@ def iter_session_files(root: Path) -> Iterator[Path]:
     yield from sorted(root.rglob("*.jsonl"))
 
 
-def _matches_project(path: Path, projects: Sequence[str]) -> bool:
-    """Privacy-scoping predicate: keep ``path`` only if it matches a filter.
+def _matches_project(
+    path: Path,
+    projects: Sequence[str],
+    exclude: Sequence[str] = (),
+) -> bool:
+    """Privacy-scoping predicate: keep ``path`` only if it passes include/exclude filters.
 
-    ``projects`` is a list of case-insensitive substrings matched against the
-    full path (the encoded project dir name). Empty list = match everything.
+    ``projects`` is a list of case-insensitive include substrings; empty = include all.
+    ``exclude`` is a list of case-insensitive exclude substrings; matched paths are
+    always dropped, even if they match ``projects``.
     """
+    hay = str(path).casefold()
+    if exclude and any(e.casefold() in hay for e in exclude):
+        return False
     if not projects:
         return True
-    hay = str(path).casefold()
     return any(p.casefold() in hay for p in projects)
+
+
+def _is_prose_sentence(sentence: str) -> bool:
+    """Return True only when a sentence is plausibly user-typed natural-language prose.
+
+    Rejects structural patterns that consistently produce false positives before
+    any LLM call is made:
+    - DB dump rows (UUID-prefixed lines from pasted query output)
+    - Tab-delimited structured data
+    - Markdown list items and headings
+    - Tool-call instruction prefixes (user directing the assistant)
+    - Garbled concatenated table rows
+    """
+    stripped = sentence.strip()
+    if len(stripped) < 6:
+        return False
+    if _UUID_PREFIX.match(stripped):
+        return False
+    if "\t" in stripped:
+        return False
+    if _MARKDOWN_BULLET.match(stripped) or _MARKDOWN_HEADER.match(stripped):
+        return False
+    if _GARBLED_TABLE.search(stripped):
+        return False
+    lowered = stripped.casefold()
+    if any(lowered.startswith(p) for p in _INSTRUCTION_PREFIXES):
+        return False
+    return True
 
 
 def iter_file_candidates(path: Path) -> Iterator[Candidate]:
@@ -174,7 +232,8 @@ def iter_file_candidates(path: Path) -> Iterator[Candidate]:
                     continue
                 for text in _user_texts_from_record(record):
                     for sentence in split_sentences(text):
-                        yield Candidate(sentence=sentence, source=path)
+                        if _is_prose_sentence(sentence):
+                            yield Candidate(sentence=sentence, source=path)
     except OSError:
         return
 
@@ -250,6 +309,7 @@ def run_ingest(
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     limit: int | None = None,
     projects: Sequence[str] = (),
+    exclude: Sequence[str] = (),
     output_path: Path | None = None,
 ) -> IngestReport:
     """Walk the backlog and classify every candidate. Never writes to the DB.
@@ -258,6 +318,9 @@ def run_ingest(
     immediately) so progress survives a kill or power-off. Pass
     ``output_path=None`` to skip file output.
 
+    Duplicate sentences (same normalised text seen in any prior file) are
+    counted in ``report.duplicates_skipped`` and not sent to the LLM.
+
     Args:
         parser: A ready ``InputParser`` (from ``factory.make_parser``).
         root: Directory of Claude Code session logs.
@@ -265,6 +328,8 @@ def run_ingest(
         limit: Stop after this many candidates (a quick smoke cap); None = all.
         projects: Case-insensitive path substrings to scope which sessions are
             eligible (the privacy-scoping hook). Empty = every session.
+        exclude: Case-insensitive path substrings; matching sessions are always
+            skipped even if they also match ``projects``.
         output_path: JSONL file to append each verdict to immediately.
 
     Raises:
@@ -273,7 +338,10 @@ def run_ingest(
             sentence as an error.
     """
     report = IngestReport()
-    files = [p for p in iter_session_files(root) if _matches_project(p, projects)]
+    files = [
+        p for p in iter_session_files(root)
+        if _matches_project(p, projects, exclude)
+    ]
     report.files_scanned = len(files)
     sys.stderr.write(f"[ingest] {len(files)} session files found\n")
     if output_path:
@@ -281,11 +349,17 @@ def run_ingest(
     sys.stderr.flush()
 
     start = time.monotonic()
+    seen_normalized: set[str] = set()
 
     out = open(output_path, "a", encoding="utf-8") if output_path else None
     try:
         for file_idx, path in enumerate(files, 1):
             for candidate in iter_file_candidates(path):
+                norm = candidate.sentence.strip().casefold()
+                if norm in seen_normalized:
+                    report.duplicates_skipped += 1
+                    continue
+                seen_normalized.add(norm)
                 bucket, reason, signals = classify_candidate(candidate, parser)
                 report.total_candidates += 1
                 report.decisions[bucket] += 1
@@ -382,6 +456,8 @@ def format_report(report: IngestReport, sample_size: int = DEFAULT_SAMPLE_SIZE) 
     lines.append(bar)
     lines.append(f"files scanned:  {report.files_scanned}")
     lines.append(f"candidates:     {total}")
+    if report.duplicates_skipped:
+        lines.append(f"deduped:        {report.duplicates_skipped}  (skipped — same sentence seen before)")
     lines.append("")
 
     lines.append(f"{'verdict':<10}{'count':>8}{'share':>9}")
@@ -447,6 +523,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="SUBSTR",
+        help=(
+            "Skip sessions whose path contains SUBSTR (repeatable; "
+            "case-insensitive). Use this to omit the project you are "
+            "developing in (e.g. --exclude LifeGraph)."
+        ),
+    )
+    parser.add_argument(
         "--sample",
         type=int,
         default=DEFAULT_SAMPLE_SIZE,
@@ -459,12 +546,42 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Stop after N candidates (quick smoke run). Default: process all.",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("ingest_results.jsonl"),
+        metavar="PATH",
+        help=(
+            "Append each verdict as a JSON line to this file immediately "
+            "(flushed after every write, so progress survives a kill). "
+            "Default: ingest_results.jsonl"
+        ),
+    )
+    parser.add_argument(
+        "--report-only",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Skip the LLM entirely: read a previously saved results file "
+            "and print the report from it. Useful after a partial run."
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI: build a parser from config, run a dry-run pass, print the report."""
     args = _build_arg_parser().parse_args(argv)
+
+    # --report-only: regenerate the report from a saved results file, no LLM.
+    if args.report_only is not None:
+        if not args.report_only.exists():
+            print(f"Results file not found: {args.report_only}")
+            return 1
+        report = report_from_file(args.report_only, sample_size=args.sample)
+        print(format_report(report, sample_size=args.sample))
+        return 0
 
     parser = make_parser()
     if parser is None:
@@ -481,6 +598,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             sample_size=args.sample,
             limit=args.limit,
             projects=args.project,
+            exclude=args.exclude,
+            output_path=args.output,
         )
     except (OllamaUnavailableError, OllamaTimeoutError) as exc:
         print(
