@@ -56,7 +56,12 @@ from lifegraph.parser import (
     InvalidTypeError,
     UnparseableResponse,
 )
-from lifegraph.salience import SalienceDecision, classify
+from lifegraph.salience import (
+    SalienceDecision,
+    classify,
+    looks_like_code,
+    transient_drop_signals,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -117,6 +122,24 @@ _INSTRUCTION_PREFIXES: tuple[str, ...] = (
 # Garbled concatenated table rows (e.g. "...stable.2"I use VS Code..."KEPT...").
 _GARBLED_TABLE = re.compile(r'\d["\']|\bKEPT\b|\bHELD\b|\bDROPPED\b')
 
+# Line openers that are code, not prose. In claude.ai exports pasted code sits
+# inside human messages (there is no tool-result separation), so the prose
+# filter must catch it before it costs an LLM call. Conservative on purpose:
+# only openers that essentially never start typed English.
+_CODE_LINE_PREFIXES: tuple[str, ...] = (
+    "import ",
+    "def ",
+    "class ",
+    "function ",
+    "const ",
+    "let ",
+    "var ",
+    "#include",
+    "pip install",
+    "npm install",
+    "npx ",
+)
+
 DEFAULT_SAMPLE_SIZE = 5
 
 
@@ -141,6 +164,7 @@ class IngestReport:
     conversations_scanned: int = 0   # claude.ai export conversations
     total_candidates: int = 0
     duplicates_skipped: int = 0
+    resumed_previous: int = 0        # verdicts loaded from an earlier run's output
     # bucket ("kept"|"held"|"dropped") -> count
     decisions: Counter = field(default_factory=Counter)
     # salience/parse signal -> count, among DROPPED candidates only
@@ -192,6 +216,9 @@ def _is_prose_sentence(sentence: str) -> bool:
     - Markdown list items and headings
     - Tool-call instruction prefixes (user directing the assistant)
     - Garbled concatenated table rows
+    - Code lines (fences, dense code punctuation, code-keyword openers,
+      trailing ``;``/``{``/``}``) — pasted code lives inside human messages
+      in claude.ai exports
     """
     stripped = sentence.strip()
     if len(stripped) < 6:
@@ -204,7 +231,11 @@ def _is_prose_sentence(sentence: str) -> bool:
         return False
     if _GARBLED_TABLE.search(stripped):
         return False
+    if looks_like_code(stripped) or stripped.endswith((";", "{", "}")):
+        return False
     lowered = stripped.casefold()
+    if lowered.startswith(_CODE_LINE_PREFIXES):
+        return False
     if any(lowered.startswith(p) for p in _INSTRUCTION_PREFIXES):
         return False
     return True
@@ -327,11 +358,24 @@ def classify_candidate(
 ) -> Tuple[str, str, List[str]]:
     """Run one candidate through parse + salience; return (bucket, reason, signals).
 
+    Two-stage: the sentence-only transient vetoes run *before* the LLM parse.
+    Any sentence they flag is guaranteed to be DROPped by ``classify`` whatever
+    the parser would return (~80% of real traffic, measured), so the parse is
+    skipped entirely — same verdict, no LLM cost.
+
     Per-sentence failures are bucketed as ``dropped`` with a synthetic signal,
     matching how ``add_observation`` reports them. Environmental Ollama failures
     (service down / timeout) are *not* per-sentence verdicts, so they propagate
     to the caller, which aborts the whole run with a clear message.
     """
+    pre_signals = transient_drop_signals(candidate.sentence)
+    if pre_signals:
+        return (
+            "dropped",
+            "Sentence looks transient (" + ", ".join(pre_signals) + ").",
+            pre_signals,
+        )
+
     try:
         proposed = parser.parse(candidate.sentence)
     except (InvalidTypeError, UnparseableResponse) as exc:
@@ -365,6 +409,13 @@ def run_ingest(
     Each verdict is appended to ``output_path`` (one JSON line, flushed
     immediately) so progress survives a kill or power-off. Pass
     ``output_path=None`` to skip file output.
+
+    Resume: if ``output_path`` already holds verdicts from an earlier run,
+    those sentences are loaded into the dedup set first (counted in
+    ``report.resumed_previous``) and skipped, so an interrupted multi-hour run
+    restarts where it left off instead of from zero. The returned report
+    covers only *this* run's new verdicts; use ``--report-only`` on the
+    accumulated output file for combined totals.
 
     Duplicate sentences (same normalised text seen in any prior source) are
     counted in ``report.duplicates_skipped`` and not sent to the LLM. Dedup
@@ -409,9 +460,35 @@ def run_ingest(
             sys.stderr.write(f"[ingest] warning: cannot read export: {exc}\n")
         report.conversations_scanned = len(export_convs)
 
+    # Resume: sentences already classified into output_path in an earlier run
+    # are seeded into the dedup set so they are never re-sent to the LLM.
+    seen_normalized: set[str] = set()
+    if output_path is not None and output_path.exists():
+        try:
+            with output_path.open(encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    sentence = rec.get("sentence")
+                    if isinstance(sentence, str):
+                        seen_normalized.add(sentence.strip().casefold())
+        except OSError:
+            pass
+        report.resumed_previous = len(seen_normalized)
+
     sys.stderr.write(f"[ingest] {len(files)} session files found\n")
     if export_convs:
         sys.stderr.write(f"[ingest] {len(export_convs)} conversations in export\n")
+    if report.resumed_previous:
+        sys.stderr.write(
+            f"[ingest] resuming: {report.resumed_previous} sentences already "
+            f"classified in {output_path} will be skipped\n"
+        )
     if output_path:
         sys.stderr.write(f"[ingest] writing results to {output_path}\n")
     sys.stderr.flush()
@@ -423,7 +500,6 @@ def run_ingest(
             yield from _iter_export_from_conversations(export_convs)
 
     start = time.monotonic()
-    seen_normalized: set[str] = set()
 
     out = open(output_path, "a", encoding="utf-8") if output_path else None
     try:
@@ -532,6 +608,11 @@ def format_report(report: IngestReport, sample_size: int = DEFAULT_SAMPLE_SIZE) 
     if report.conversations_scanned:
         lines.append(f"conversations:  {report.conversations_scanned}  (claude.ai export)")
     lines.append(f"candidates:     {total}")
+    if report.resumed_previous:
+        lines.append(
+            f"resumed:        {report.resumed_previous}  (already classified in a previous run; "
+            "use --report-only for combined totals)"
+        )
     if report.duplicates_skipped:
         lines.append(f"deduped:        {report.duplicates_skipped}  (skipped — same sentence seen before)")
     lines.append("")

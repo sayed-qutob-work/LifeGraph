@@ -162,9 +162,11 @@ def test_classify_candidate_keep_hold_drop():
 
 
 def test_classify_candidate_parse_error_is_dropped():
+    # Sentence must pass the pre-LLM screen (first person, not a question)
+    # so the parser is actually reached and its failure is what drops it.
     parser = FakeParser()
     bucket, reason, signals = classify_candidate(
-        Candidate("badjson here", Path("s")), parser
+        Candidate("I keep badjson around.", Path("s")), parser
     )
     assert bucket == "dropped"
     assert "parse_error" in signals
@@ -176,7 +178,7 @@ def test_classify_candidate_input_error_is_dropped():
             raise InputValidationError("too long")
 
     bucket, _, signals = classify_candidate(
-        Candidate("whatever", Path("s")), TooLongParser()
+        Candidate("I keep this around.", Path("s")), TooLongParser()
     )
     assert bucket == "dropped"
     assert "input_error" in signals
@@ -185,7 +187,35 @@ def test_classify_candidate_input_error_is_dropped():
 def test_classify_candidate_propagates_ollama_failure():
     parser = FakeParser()
     with pytest.raises(OllamaUnavailableError):
-        classify_candidate(Candidate("boom goes ollama", Path("s")), parser)
+        classify_candidate(Candidate("I run boom daily.", Path("s")), parser)
+
+
+def test_classify_candidate_pre_screens_transients_without_llm():
+    # Sentence-only DROP vetoes must skip the parse entirely (the 5x speedup).
+    parser = FakeParser()
+
+    bucket, reason, signals = classify_candidate(
+        Candidate("Ollama is a popular runtime.", Path("s")), parser
+    )
+    assert bucket == "dropped"
+    assert "no_first_person_reference" in signals
+
+    bucket, _, signals = classify_candidate(
+        Candidate("Should I use Ollama for this?", Path("s")), parser
+    )
+    assert bucket == "dropped"
+    assert "question_mark" in signals
+
+    assert parser.calls == []  # the LLM was never invoked
+
+
+def test_classify_candidate_pre_screen_reason_matches_classify_format():
+    # Pre-screened drops must be indistinguishable from post-parse drops.
+    bucket, reason, _ = classify_candidate(
+        Candidate("Ollama is a popular runtime.", Path("s")), FakeParser()
+    )
+    assert bucket == "dropped"
+    assert reason.startswith("Sentence looks transient (")
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +386,26 @@ def test_is_prose_sentence_rejects_instruction_prefixes():
     assert not _is_prose_sentence("You paste I use an RTX 3090 → graph captures RTX 3090")
 
 
+def test_is_prose_sentence_rejects_code_lines():
+    # claude.ai exports embed pasted code inside human messages.
+    assert not _is_prose_sentence("import daisyui from 'daisyui';")
+    assert not _is_prose_sentence("def load_model(path):")
+    assert not _is_prose_sentence("const app = express()")
+    assert not _is_prose_sentence("result = compute(a, b) if (a > b) else [b, a];")
+    assert not _is_prose_sentence("```python")
+    assert not _is_prose_sentence("npm install daisyui")
+    # Trailing code punctuation is a code line even without a keyword opener.
+    assert not _is_prose_sentence("box-sizing: border-box;")
+    assert not _is_prose_sentence("export default {")
+
+
+def test_is_prose_sentence_keeps_prose_mentioning_code_words():
+    # Prose that merely talks about code must still pass.
+    assert _is_prose_sentence("I want to import my data from the old tool.")
+    assert _is_prose_sentence("My class starts at 9 and I code after it.")
+    assert _is_prose_sentence("I let the model run overnight on my 3090.")
+
+
 def test_is_prose_sentence_rejects_garbled_table_rows():
     assert not _is_prose_sentence(
         'Questions are filtered as non-stable.2"I use VS Code."KEPTStable first-person fact.'
@@ -420,6 +470,69 @@ def test_run_ingest_dedup_is_case_insensitive(tmp_path: Path):
     report = run_ingest(FakeParser(), root=root)
     assert report.total_candidates == 1
     assert report.duplicates_skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# Resume from a previous run's output file
+# ---------------------------------------------------------------------------
+
+
+def test_run_ingest_resumes_from_existing_output(tmp_path: Path):
+    root = _seed_backlog(tmp_path)
+    out = tmp_path / "results.jsonl"
+
+    first = run_ingest(FakeParser(), root=root, output_path=out)
+    assert first.total_candidates == 4
+    assert first.resumed_previous == 0
+
+    # Second run over the same backlog: every sentence was already classified.
+    parser2 = FakeParser()
+    second = run_ingest(parser2, root=root, output_path=out)
+
+    assert second.resumed_previous == 4
+    assert second.total_candidates == 0   # nothing new classified
+    assert parser2.calls == []            # and the LLM was never touched
+    # The output file was not double-written.
+    lines = [l for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 4
+
+
+def test_run_ingest_resume_picks_up_only_new_sentences(tmp_path: Path):
+    root = tmp_path / "projects"
+    (root / "proj").mkdir(parents=True)
+    log = root / "proj" / "s.jsonl"
+    _write_jsonl(log, [_user_record("I use Ollama daily.")])
+    out = tmp_path / "results.jsonl"
+
+    run_ingest(FakeParser(), root=root, output_path=out)
+
+    # A new sentence appears in the backlog (e.g. run was killed mid-way).
+    _write_jsonl(log, [
+        _user_record("I use Ollama daily."),
+        _user_record("I use Mistral on weekends."),
+    ])
+    second = run_ingest(FakeParser(), root=root, output_path=out)
+
+    assert second.resumed_previous == 1
+    assert second.total_candidates == 1  # only the new sentence
+    lines = [l for l in out.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) == 2
+
+
+def test_run_ingest_no_resume_without_output_file(tmp_path: Path):
+    root = _seed_backlog(tmp_path)
+    report = run_ingest(FakeParser(), root=root, output_path=None)
+    assert report.resumed_previous == 0
+
+
+def test_format_report_shows_resumed_when_nonzero():
+    report = IngestReport()
+    report.total_candidates = 1
+    report.resumed_previous = 42
+    report.decisions.update({"kept": 1})
+    text = format_report(report)
+    assert "resumed" in text
+    assert "42" in text
 
 
 # ---------------------------------------------------------------------------

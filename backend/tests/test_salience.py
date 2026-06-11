@@ -15,7 +15,7 @@ from lifegraph.domain import (
     ProposedGraph,
     ProposedNode,
 )
-from lifegraph.salience import SalienceDecision, classify
+from lifegraph.salience import SalienceDecision, classify, transient_drop_signals
 
 
 # ---------------------------------------------------------------------------
@@ -161,3 +161,66 @@ class TestVerdictShape:
         verdict = classify("I use Ollama", _tool_proposal())
         assert verdict.reason
         assert isinstance(verdict.signals, list)
+
+
+# ---------------------------------------------------------------------------
+# First-person word boundaries (the "daisyui" bug)
+# ---------------------------------------------------------------------------
+
+
+class TestFirstPersonWordBoundaries:
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "import daisyui from 'daisyui'",     # "...daisyu[i f]rom" is not "i "
+            "the wifi is flaky at the office",   # "...wif[i i]s" is not "i "
+            "Ollama is a popular local runtime",
+        ],
+    )
+    def test_word_endings_in_i_are_not_first_person(self, sentence: str) -> None:
+        verdict = classify(sentence, _tool_proposal())
+        assert verdict.decision is SalienceDecision.DROP
+        assert "no_first_person_reference" in verdict.signals
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "that laptop belongs to me",     # "me" at sentence end (no spaces around)
+            "I used Vim for a decade",       # "i use" cue must still cover "i used"
+        ],
+    )
+    def test_genuine_first_person_still_detected(self, sentence: str) -> None:
+        verdict = classify(sentence, _person_proposal())
+        assert "no_first_person_reference" not in verdict.signals
+
+
+# ---------------------------------------------------------------------------
+# transient_drop_signals — the sentence-only pre-screen contract
+# ---------------------------------------------------------------------------
+
+
+class TestTransientDropSignals:
+    def test_flags_transient_sentences_without_a_proposal(self) -> None:
+        assert "question_mark" in transient_drop_signals("Should I use Ollama?")
+        assert "no_first_person_reference" in transient_drop_signals(
+            "Ollama is a popular runtime."
+        )
+        assert "code_snippet" in transient_drop_signals("```python")
+        assert transient_drop_signals("I use Ollama for local inference") == []
+
+    @pytest.mark.parametrize(
+        "sentence",
+        [
+            "Should I use Ollama for this?",
+            "Ollama is a popular local runtime",
+            "what if I switched to vLLM",
+            "can you fix the parser for me",
+            "store.execute(sql, (a, b)); return rows[0];",
+        ],
+    )
+    def test_any_flagged_sentence_is_dropped_by_classify(self, sentence: str) -> None:
+        # The pre-screen guarantee: a non-empty result means classify DROPs the
+        # sentence regardless of what the parser proposes.
+        assert transient_drop_signals(sentence)
+        verdict = classify(sentence, _tool_proposal())
+        assert verdict.decision is SalienceDecision.DROP

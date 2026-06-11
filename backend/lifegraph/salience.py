@@ -195,23 +195,24 @@ _FIRST_PERSON_STATIVE: tuple[str, ...] = (
 
 # Broad first-person markers used to detect whether a sentence is about the
 # user at all. Anything with none of these is a general third-party claim.
-_FIRST_PERSON_ANY: tuple[str, ...] = (
-    "i ",
-    "i'm",
-    "im ",
-    "i've",
-    "i'd",
-    "i'll",
-    "my ",
-    " me ",
-    " mine",
+# Matched as whole words: a bare substring check made any word ending in "i"
+# ("daisyui from", "wifi is") read as first-person.
+_FIRST_PERSON_ANY_RE = re.compile(
+    r"(?<!\w)(?:i|i'm|im|i've|i'd|i'll|my|me|mine)(?!\w)"
 )
 
 # Handles "my main project", "my primary active project", etc.
 # The exact-substring list misses adjectives between "my" and the noun.
 _MY_ADJ_NOUN = re.compile(
-    r"my\s+\w+\s+(?:\w+\s+)?"
+    r"\bmy\s+\w+\s+(?:\w+\s+)?"
     r"(project|workflow|stack|setup|machine|gpu|laptop|model|desktop|computer)\b"
+)
+
+# The stative cues, anchored so they only match at a word start ("i use" must
+# not fire inside "daisyui used"). No trailing anchor: "i use" should still
+# cover "i used" / "i uses", as the plain substring check did.
+_FIRST_PERSON_STATIVE_RE = re.compile(
+    "(?<!\\w)(?:" + "|".join(re.escape(cue) for cue in _FIRST_PERSON_STATIVE) + ")"
 )
 
 # A rough "this looks like code" detector: fenced blocks, or a high density of
@@ -252,27 +253,7 @@ def classify(sentence: str, proposal: ProposedGraph) -> SalienceVerdict:
         )
 
     # --- DROP: strong transient vetoes. --------------------------------------
-    drop_signals: list[str] = []
-
-    if text.endswith("?"):
-        drop_signals.append("question_mark")
-    elif _opens_with_interrogative(lowered):
-        drop_signals.append("interrogative_opener")
-
-    if any(marker in lowered for marker in _HYPOTHETICAL_MARKERS):
-        drop_signals.append("hypothetical")
-
-    if any(lowered.startswith(marker) for marker in _ASSISTANT_COMMAND_MARKERS) or any(
-        marker in lowered for marker in _ASSISTANT_COMMAND_MARKERS
-    ):
-        drop_signals.append("assistant_command")
-
-    if _looks_like_code(text):
-        drop_signals.append("code_snippet")
-
-    if not _has_any_first_person(lowered):
-        drop_signals.append("no_first_person_reference")
-
+    drop_signals = transient_drop_signals(text)
     if drop_signals:
         return SalienceVerdict(
             SalienceDecision.DROP,
@@ -304,6 +285,42 @@ def classify(sentence: str, proposal: ProposedGraph) -> SalienceVerdict:
     return SalienceVerdict(SalienceDecision.HOLD, hold_reason, keep_signals or ["uncertain"])
 
 
+def transient_drop_signals(sentence: str) -> List[str]:
+    """Sentence-only transient vetoes — computable without any LLM parse.
+
+    Returns the names of the DROP signals that fire on the raw sentence alone
+    (question, hypothetical, assistant command, code, no first-person
+    reference). ``classify`` applies these same vetoes after the parse; a
+    caller on a hot path (the log ingestor) can call this *before* paying for
+    the LLM, because any sentence with a non-empty result is guaranteed to be
+    DROPped by ``classify`` no matter what the parser would have produced.
+    """
+    text = (sentence or "").strip()
+    lowered = text.casefold()
+    signals: List[str] = []
+
+    if text.endswith("?"):
+        signals.append("question_mark")
+    elif _opens_with_interrogative(lowered):
+        signals.append("interrogative_opener")
+
+    if any(marker in lowered for marker in _HYPOTHETICAL_MARKERS):
+        signals.append("hypothetical")
+
+    if any(lowered.startswith(marker) for marker in _ASSISTANT_COMMAND_MARKERS) or any(
+        marker in lowered for marker in _ASSISTANT_COMMAND_MARKERS
+    ):
+        signals.append("assistant_command")
+
+    if looks_like_code(text):
+        signals.append("code_snippet")
+
+    if not _has_any_first_person(lowered):
+        signals.append("no_first_person_reference")
+
+    return signals
+
+
 # ---------------------------------------------------------------------------
 # Signal helpers
 # ---------------------------------------------------------------------------
@@ -316,7 +333,7 @@ def _opens_with_interrogative(lowered: str) -> bool:
 
 def _has_first_person_stative(lowered: str) -> bool:
     """True when the sentence states something about the user's own setup."""
-    if any(cue in lowered for cue in _FIRST_PERSON_STATIVE):
+    if _FIRST_PERSON_STATIVE_RE.search(lowered):
         return True
     # Catch "my [adjective] project/workflow/..." that exact-substring misses.
     return bool(_MY_ADJ_NOUN.search(lowered))
@@ -329,11 +346,15 @@ def _touches_user_relevant_type(proposal: ProposedGraph) -> bool:
 
 def _has_any_first_person(lowered: str) -> bool:
     """True when the sentence contains any first-person reference."""
-    return any(marker in lowered for marker in _FIRST_PERSON_ANY)
+    return bool(_FIRST_PERSON_ANY_RE.search(lowered))
 
 
-def _looks_like_code(text: str) -> bool:
-    """Heuristic: fenced block, or a high density of code punctuation."""
+def looks_like_code(text: str) -> bool:
+    """Heuristic: fenced block, or a high density of code punctuation.
+
+    Public because the ingestor's prose filter uses the same definition of
+    "code" to reject lines before any LLM call.
+    """
     if _CODE_FENCE.search(text):
         return True
     if not text:
