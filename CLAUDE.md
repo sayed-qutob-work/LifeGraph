@@ -33,7 +33,15 @@ cd backend && pytest --cov=lifegraph          # with coverage
 cd frontend && npm install                    # first time
 cd frontend && npm test                       # vitest run
 cd frontend && npm run test:watch
+
+# Log/export ingest (classification is read-only; --persist writes)
+cd backend && python -m lifegraph.ingest                          # classify Claude Code logs -> ingest_results.jsonl
+cd backend && python -m lifegraph.ingest --export conversations.json --output export_results.jsonl
+cd backend && python -m lifegraph.ingest --report-only export_results.jsonl   # re-print report, no LLM
+cd backend && python -m lifegraph.ingest --persist curated.txt    # apply a hand-reviewed sentence list to the DB
 ```
+
+The graph database (`backend/lifegraph.db*`) and ingest verdict files (`*_results.jsonl`) contain personal data and are gitignored — never commit or publish them.
 
 There is no build step or linter configured. Many tests are **property-based** (Hypothesis in Python, fast-check in JS) — files ending `_property.py` / using `fc.assert`.
 
@@ -70,6 +78,10 @@ NL sentence
 - **`serializer.py` (`ContextSerializer`)** — pure function: bounded BFS from a root node (max hops/nodes/chars) → deterministic plain text. Ordering is by `(hop distance, node id)` so output is stable.
 
 - **`search.py`** (`filter_graph`), **`dashboard.py`** (`aggregate_dashboard`), **`validation.py`** (label/attribute/date validators raising `*ValidationError`).
+
+- **`salience.py`** — pure heuristic classifier `classify(sentence, ProposedGraph) -> KEEP | HOLD | DROP` gating the passive-capture path (`add_observation`): stable first-person facts persist, ambiguous ones go to the `held_observations` review queue, transient ones are discarded. Ground truth lives in `tests/salience_corpus.py`.
+
+- **`ingest.py`** — batch ingestor over Claude Code session logs (`~/.claude/projects/**/*.jsonl`) and claude.ai `conversations.json` exports. Classification runs are read-only (verdicts append to a JSONL results file, resumable); `--persist` applies a hand-reviewed sentence list through parse → `apply_proposal` without re-applying the salience gate (the list carries the human decision).
 
 ### Two front doors share one core
 

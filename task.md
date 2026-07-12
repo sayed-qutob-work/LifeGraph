@@ -97,7 +97,21 @@ LifeGraph is the **one personal context layer you own that follows you across ev
 
 ## 7. Current Task
 
-**Build the dry-run (report-only) Claude Code JSONL ingestor: `backend/lifegraph/ingest.py`.**
+**CLOSED OUT — 2026-07-12. The project is on hold; the repo is in its finished state.**
+
+The dry-run ingestor below was built and run over the *entire* backlog (33 Claude Code session files on 2026-06-10, then the full 192-conversation claude.ai export on 2026-07-12). The §6 Month-3 question got its answer early: the genuine-fact yield of the whole backlog is far below the ~300-fact moat threshold (final numbers in `README.md`), and most KEEP verdicts on the Claude Code logs were contamination — LifeGraph's own test sentences echoed back during dogfooding. Per §7's own tripwire ("KEEP count well below ~300 → revisit the moat thesis"), the thesis is revisited and the verdict is: shelve cheaply, exactly as §6 planned for.
+
+Close-out actions taken (2026-07-12):
+- Full export classified; KEEP/HOLD verdicts hand-reviewed; curated facts persisted into a rebuilt local DB via the new `ingest.py --persist` path (old DB backed up as `lifegraph.db.bak`). The DB and all `*_results.jsonl` are gitignored and untracked.
+- UI overhauled: black theme, circular nodes, semantic-family colors.
+- `README.md` written with the concept, architecture, and the experiment's honest numbers.
+- Repo debris deleted; test suites green.
+
+What would resume the project is listed in README's "What would revive it". Everything below this line is the historical record of how the experiment was built.
+
+---
+
+**[Historical] Build the dry-run (report-only) Claude Code JSONL ingestor: `backend/lifegraph/ingest.py`.**
 
 Walk `~/.claude/projects/**/*.jsonl`, pull candidate sentences out of each session, push every one through the **existing** `parser.parse` + `salience.classify`, and print a KEEP/HOLD/DROP confusion report **without writing a single row to the DB.** Count the verdicts, sample a handful of each, and stop. No persistence, no review UI, no schema change.
 
