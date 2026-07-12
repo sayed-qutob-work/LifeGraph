@@ -42,3 +42,4 @@ Thumbs.db
 
 # Local Claude Code settings (personal)
 .claude/settings.local.json
+backend/curated_retry.txt
