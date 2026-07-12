@@ -84,7 +84,7 @@ SearchFilter.prototype.reapply = function () {
             );
         })
         .catch(function (err) {
-            self._setStatus("Error: " + err.message);
+            self._setStatus("Error: " + err.message, "error");
         });
 };
 
@@ -216,7 +216,7 @@ SearchFilter.prototype._applyFilters = function () {
             );
         })
         .catch(function (err) {
-            self._setStatus("Error: " + err.message);
+            self._setStatus("Error: " + err.message, "error");
         });
 };
 
@@ -251,17 +251,21 @@ SearchFilter.prototype._restoreFullGraph = function () {
 
     // Refresh the graph view to show all nodes and edges
     refreshGraphView().catch(function (err) {
-        self._setStatus("Error restoring graph: " + err.message);
+        self._setStatus("Error restoring graph: " + err.message, "error");
     });
 };
 
 /**
  * Update the status indicator text.
  * @param {string} message
+ * @param {string} [type] - "error" or omitted for neutral status text.
  */
-SearchFilter.prototype._setStatus = function (message) {
+SearchFilter.prototype._setStatus = function (message, type) {
     var statusEl = document.getElementById("search-status");
     if (statusEl) {
         statusEl.textContent = message;
+        statusEl.classList.remove("is-error", "is-success");
+        if (type === "error") statusEl.classList.add("is-error");
+        if (type === "success") statusEl.classList.add("is-success");
     }
 };

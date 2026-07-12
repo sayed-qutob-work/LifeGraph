@@ -331,7 +331,12 @@
         var preview = parseForm.querySelector("#app-parse-preview");
         var currentToken = null;
 
-        function setStatus(msg) { status.textContent = msg || ""; }
+        function setStatus(msg, type) {
+            status.textContent = msg || "";
+            status.classList.remove("is-error", "is-success");
+            if (type === "error") status.classList.add("is-error");
+            if (type === "success") status.classList.add("is-success");
+        }
         function clearPreview() { preview.innerHTML = ""; }
 
         parseForm.addEventListener("submit", function (e) {
@@ -339,7 +344,7 @@
             var sentence = (input.value || "").trim();
             clearPreview();
             if (sentence === "") {
-                setStatus("Please enter a sentence.");
+                setStatus("Please enter a sentence.", "error");
                 return;
             }
             setStatus("Parsing…");
@@ -350,7 +355,7 @@
                     showProposalPreview(proposal);
                 })
                 .catch(function (err) {
-                    setStatus("Parse failed: " + err.message);
+                    setStatus("Parse failed: " + err.message, "error");
                 });
         });
 
@@ -426,12 +431,12 @@
                         currentToken = null;
                         clearPreview();
                         input.value = "";
-                        setStatus("Added to graph.");
+                        setStatus("Added to graph.", "success");
                         // Store changed: re-render the view (Req 7.5).
                         return handleGraphChanged();
                     })
                     .catch(function (err) {
-                        setStatus("Save failed: " + err.message);
+                        setStatus("Save failed: " + err.message, "error");
                     });
             });
 
@@ -443,7 +448,7 @@
                         setStatus("Proposal discarded.");
                     })
                     .catch(function (err) {
-                        setStatus("Reject failed: " + err.message);
+                        setStatus("Reject failed: " + err.message, "error");
                     });
             });
         }

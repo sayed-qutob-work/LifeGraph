@@ -2,27 +2,38 @@
 "use strict";
 
 /**
- * Per-type node styling: each NodeType gets a distinct color and shape.
- * This mapping is injective — no two types share the same (color, shape) pair.
+ * Per-type node styling: every NodeType renders as a circle ("dot"). Types are
+ * grouped into semantic families that share a color from the dark-surface
+ * categorical palette (validated against the #1a1a19 panel surface). Label
+ * font color is white for every type.
  */
 const NODE_TYPE_STYLES = {
-    Skill:        { color: { background: "#2E7D32", border: "#1B5E20", highlight: { background: "#66BB6A", border: "#1B5E20" } }, shape: "dot" },
-    Goal:         { color: { background: "#F57C00", border: "#E65100", highlight: { background: "#FFB74D", border: "#E65100" } }, shape: "star" },
-    Habit:        { color: { background: "#7B1FA2", border: "#4A148C", highlight: { background: "#BA68C8", border: "#4A148C" } }, shape: "diamond" },
-    Project:      { color: { background: "#1976D2", border: "#0D47A1", highlight: { background: "#64B5F6", border: "#0D47A1" } }, shape: "square" },
-    Event:        { color: { background: "#C62828", border: "#8E0000", highlight: { background: "#EF5350", border: "#8E0000" } }, shape: "triangle" },
-    Person:       { color: { background: "#00838F", border: "#005662", highlight: { background: "#4DD0E1", border: "#005662" } }, shape: "ellipse" },
-    Organization: { color: { background: "#455A64", border: "#263238", highlight: { background: "#90A4AE", border: "#263238" } }, shape: "database" },
-    Program:      { color: { background: "#6D4C41", border: "#3E2723", highlight: { background: "#A1887F", border: "#3E2723" } }, shape: "hexagon" },
-    Tool:         { color: { background: "#00796B", border: "#004D40", highlight: { background: "#4DB6AC", border: "#004D40" } }, shape: "box" },
-    Technology:   { color: { background: "#5E35B1", border: "#311B92", highlight: { background: "#9575CD", border: "#311B92" } }, shape: "box" },
-    Model:        { color: { background: "#AD1457", border: "#880E4F", highlight: { background: "#F06292", border: "#880E4F" } }, shape: "dot" },
-    Hardware:     { color: { background: "#546E7A", border: "#29434E", highlight: { background: "#B0BEC5", border: "#29434E" } }, shape: "box" },
-    Topic:        { color: { background: "#558B2F", border: "#33691E", highlight: { background: "#AED581", border: "#33691E" } }, shape: "ellipse" },
-    Recipe:       { color: { background: "#D84315", border: "#BF360C", highlight: { background: "#FF8A65", border: "#BF360C" } }, shape: "diamond" },
-    Issue:        { color: { background: "#B71C1C", border: "#7F0000", highlight: { background: "#E57373", border: "#7F0000" } }, shape: "triangleDown" },
-    Place:        { color: { background: "#0277BD", border: "#01579B", highlight: { background: "#4FC3F7", border: "#01579B" } }, shape: "triangle" },
-    Resource:     { color: { background: "#616161", border: "#424242", highlight: { background: "#BDBDBD", border: "#424242" } }, shape: "box" },
+    // blue — Project
+    Project:      { color: { background: "#3987e5", border: "#3987e5", highlight: { background: "#5598e7", border: "#3987e5" } }, shape: "dot", font: { color: "#ffffff" } },
+    // aqua — Tool, Technology, Program
+    Tool:         { color: { background: "#199e70", border: "#199e70", highlight: { background: "#6ac0a2", border: "#199e70" } }, shape: "dot", font: { color: "#ffffff" } },
+    Technology:   { color: { background: "#199e70", border: "#199e70", highlight: { background: "#6ac0a2", border: "#199e70" } }, shape: "dot", font: { color: "#ffffff" } },
+    Program:      { color: { background: "#199e70", border: "#199e70", highlight: { background: "#6ac0a2", border: "#199e70" } }, shape: "dot", font: { color: "#ffffff" } },
+    // yellow — Goal, Habit
+    Goal:         { color: { background: "#c98500", border: "#c98500", highlight: { background: "#dcb059", border: "#c98500" } }, shape: "dot", font: { color: "#ffffff" } },
+    Habit:        { color: { background: "#c98500", border: "#c98500", highlight: { background: "#dcb059", border: "#c98500" } }, shape: "dot", font: { color: "#ffffff" } },
+    // green — Skill, Topic
+    Skill:        { color: { background: "#008300", border: "#008300", highlight: { background: "#59ae59", border: "#008300" } }, shape: "dot", font: { color: "#ffffff" } },
+    Topic:        { color: { background: "#008300", border: "#008300", highlight: { background: "#59ae59", border: "#008300" } }, shape: "dot", font: { color: "#ffffff" } },
+    // violet — Model, Hardware
+    Model:        { color: { background: "#9085e9", border: "#9085e9", highlight: { background: "#b7b0f1", border: "#9085e9" } }, shape: "dot", font: { color: "#ffffff" } },
+    Hardware:     { color: { background: "#9085e9", border: "#9085e9", highlight: { background: "#b7b0f1", border: "#9085e9" } }, shape: "dot", font: { color: "#ffffff" } },
+    // red — Issue
+    Issue:        { color: { background: "#e66767", border: "#e66767", highlight: { background: "#ef9c9c", border: "#e66767" } }, shape: "dot", font: { color: "#ffffff" } },
+    // magenta — Person, Organization
+    Person:       { color: { background: "#d55181", border: "#d55181", highlight: { background: "#e48ead", border: "#d55181" } }, shape: "dot", font: { color: "#ffffff" } },
+    Organization: { color: { background: "#d55181", border: "#d55181", highlight: { background: "#e48ead", border: "#d55181" } }, shape: "dot", font: { color: "#ffffff" } },
+    // orange — Event, Place, Recipe
+    Event:        { color: { background: "#d95926", border: "#d95926", highlight: { background: "#e69372", border: "#d95926" } }, shape: "dot", font: { color: "#ffffff" } },
+    Place:        { color: { background: "#d95926", border: "#d95926", highlight: { background: "#e69372", border: "#d95926" } }, shape: "dot", font: { color: "#ffffff" } },
+    Recipe:       { color: { background: "#d95926", border: "#d95926", highlight: { background: "#e69372", border: "#d95926" } }, shape: "dot", font: { color: "#ffffff" } },
+    // neutral — Resource
+    Resource:     { color: { background: "#898781", border: "#898781", highlight: { background: "#b2b1ad", border: "#898781" } }, shape: "dot", font: { color: "#ffffff" } },
 };
 
 /**
@@ -41,6 +52,7 @@ function transformGraphData(graphData) {
             label: node.label,
             shape: style.shape || "dot",
             color: style.color || {},
+            font: style.font || { color: "#ffffff" },
             title: node.type + ": " + node.label,
             nodeType: node.type,
         };
@@ -53,7 +65,8 @@ function transformGraphData(graphData) {
             to: edge.target,
             label: edge.type,
             arrows: "to",
-            font: { size: 10, align: "middle" },
+            color: { color: "#383835", highlight: "#5598e7", inherit: false },
+            font: { size: 10, align: "middle", color: "#898781" },
         };
     });
 
@@ -169,9 +182,9 @@ function selectNode(nodeId) {
     const nodeUpdates = [];
     _nodesDataSet.forEach(function (visNode) {
         if (visNode.id === nodeId) {
-            nodeUpdates.push({ id: visNode.id, opacity: 1.0, font: { color: "#000" } });
+            nodeUpdates.push({ id: visNode.id, opacity: 1.0, font: { color: "#ffffff" } });
         } else {
-            nodeUpdates.push({ id: visNode.id, opacity: 0.3, font: { color: "#aaa" } });
+            nodeUpdates.push({ id: visNode.id, opacity: 0.25, font: { color: "rgba(255,255,255,0.25)" } });
         }
     });
     _nodesDataSet.update(nodeUpdates);
@@ -180,9 +193,9 @@ function selectNode(nodeId) {
     const edgeUpdates = [];
     _edgesDataSet.forEach(function (visEdge) {
         if (incidentEdgeIds.has(visEdge.id)) {
-            edgeUpdates.push({ id: visEdge.id, color: { opacity: 1.0 }, font: { color: "#333" } });
+            edgeUpdates.push({ id: visEdge.id, color: { opacity: 1.0 }, font: { color: "#c3c2b7" } });
         } else {
-            edgeUpdates.push({ id: visEdge.id, color: { opacity: 0.15 }, font: { color: "#ccc" } });
+            edgeUpdates.push({ id: visEdge.id, color: { opacity: 0.15 }, font: { color: "#383835" } });
         }
     });
     _edgesDataSet.update(edgeUpdates);
@@ -229,9 +242,12 @@ function _renderNetwork(graphData) {
         },
         edges: {
             smooth: { type: "continuous" },
+            color: { color: "#383835", highlight: "#5598e7", inherit: false },
+            font: { color: "#898781" },
+            width: 1.5,
         },
         nodes: {
-            font: { size: 14 },
+            font: { size: 13, color: "#ffffff" },
         },
     };
 
@@ -274,13 +290,13 @@ function _resetHighlighting() {
 
     var nodeUpdates = [];
     _nodesDataSet.forEach(function (visNode) {
-        nodeUpdates.push({ id: visNode.id, opacity: 1.0, font: { color: "#343434" } });
+        nodeUpdates.push({ id: visNode.id, opacity: 1.0, font: { color: "#ffffff" } });
     });
     _nodesDataSet.update(nodeUpdates);
 
     var edgeUpdates = [];
     _edgesDataSet.forEach(function (visEdge) {
-        edgeUpdates.push({ id: visEdge.id, color: { opacity: 1.0 }, font: { color: "#343434" } });
+        edgeUpdates.push({ id: visEdge.id, color: { opacity: 1.0 }, font: { color: "#898781" } });
     });
     _edgesDataSet.update(edgeUpdates);
 }
