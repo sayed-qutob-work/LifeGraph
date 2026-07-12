@@ -746,3 +746,82 @@ def test_format_report_hides_conversations_when_zero():
     report.decisions.update({"kept": 10})
     text = format_report(report)
     assert "conversations" not in text
+
+
+# ---------------------------------------------------------------------------
+# persist_reviewed / read_sentence_list (the --persist path)
+# ---------------------------------------------------------------------------
+
+
+def test_read_sentence_list_skips_comments_and_blanks(tmp_path):
+    listing = tmp_path / "curated.txt"
+    listing.write_text(
+        "# hardware\nI use an RTX 3090.\n\n  \n# tools\nI use VS Code.\n",
+        encoding="utf-8",
+    )
+    from lifegraph.ingest import read_sentence_list
+
+    assert read_sentence_list(listing) == ["I use an RTX 3090.", "I use VS Code."]
+
+
+def test_persist_reviewed_applies_without_salience_gate(tmp_path):
+    """A reviewed list bypasses the salience gate (human decision wins) and
+    lands in the store with provenance recorded."""
+    from lifegraph.factory import make_store
+    from lifegraph.ingest import persist_reviewed
+
+    store = make_store(str(tmp_path / "graph.db"))
+    parser = FakeParser()
+    # "what if" would be DROPped by salience; persist applies it anyway.
+    report = persist_reviewed(
+        ["I use Ollama daily.", "what if I use a second GPU"], parser, store
+    )
+    assert report.applied == 2
+    assert report.failed == 0
+    graph = store.get_graph()
+    assert len(graph.nodes) >= 1  # deduped Tool node from both parses
+
+
+def test_persist_reviewed_collects_parse_failures(tmp_path):
+    from lifegraph.factory import make_store
+    from lifegraph.ingest import persist_reviewed
+
+    store = make_store(str(tmp_path / "graph.db"))
+    report = persist_reviewed(
+        ["badjson please", "I use Ollama."], FakeParser(), store
+    )
+    assert report.applied == 1
+    assert report.failed == 1
+    assert "badjson" in report.failures[0][0]
+
+
+def test_persist_reviewed_propagates_ollama_failure(tmp_path):
+    from lifegraph.factory import make_store
+    from lifegraph.ingest import persist_reviewed
+
+    store = make_store(str(tmp_path / "graph.db"))
+    with pytest.raises(OllamaUnavailableError):
+        persist_reviewed(["boom"], FakeParser(), store)
+
+
+def test_persist_reviewed_survives_store_rejection(tmp_path):
+    """A store-side rejection (e.g. an empty proposed label) fails that one
+    sentence and continues, instead of aborting the whole run."""
+    from lifegraph.factory import make_store
+    from lifegraph.ingest import persist_reviewed
+
+    class BadLabelParser(FakeParser):
+        def parse(self, sentence):
+            if "badlabel" in sentence.casefold():
+                return ProposedGraph(
+                    nodes=[ProposedNode(type=NodeType.TOOL, label="")], edges=[]
+                )
+            return super().parse(sentence)
+
+    store = make_store(str(tmp_path / "graph.db"))
+    report = persist_reviewed(
+        ["badlabel sentence", "I use Ollama."], BadLabelParser(), store
+    )
+    assert report.failed == 1
+    assert report.applied == 1
+    assert "label" in report.failures[0][1].casefold()

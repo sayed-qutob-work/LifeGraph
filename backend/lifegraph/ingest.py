@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -549,6 +550,79 @@ def run_ingest(
     return report
 
 
+@dataclass
+class PersistReport:
+    """Outcome of persisting a hand-reviewed sentence list into the store."""
+
+    applied: int = 0
+    failed: int = 0
+    nodes_touched: int = 0
+    edges_touched: int = 0
+    failures: List[Tuple[str, str]] = field(default_factory=list)  # (sentence, error)
+
+
+def persist_reviewed(
+    sentences: Sequence[str],
+    parser: InputParser,
+    store,
+) -> PersistReport:
+    """Persist an already-reviewed list of sentences into the graph.
+
+    This is the counterpart of ``review_held``'s "keep" path: the sentences in
+    the list carry a human decision, so the salience gate is *not* re-applied —
+    each sentence is parsed and its proposal applied (with the store's usual
+    dedup-by-identity), and the source sentence is recorded for provenance.
+
+    Per-sentence parse/input failures are collected in the report and skipped;
+    environmental Ollama errors propagate, aborting the run.
+    """
+    from lifegraph.store import SelfEdgeError, StorageError
+    from lifegraph.validation import ValidationError
+
+    report = PersistReport()
+    for sentence in sentences:
+        try:
+            proposed = parser.parse(sentence)
+        except (InvalidTypeError, UnparseableResponse, InputValidationError) as exc:
+            report.failed += 1
+            report.failures.append((sentence, str(exc)))
+            continue
+        try:
+            result = store.apply_proposal(proposed)
+        except (ValidationError, StorageError, SelfEdgeError) as exc:
+            # A store-side rejection (e.g. the LLM proposed an edge endpoint
+            # with an empty label) is a per-sentence failure, not a run abort:
+            # apply_proposal rolls back its own transaction, so the DB is clean.
+            report.failed += 1
+            report.failures.append((sentence, str(exc)))
+            continue
+        try:
+            store.record_capture(
+                sentence,
+                [n.id for n in result.nodes],
+                [e.id for e in result.edges],
+            )
+        except Exception:
+            pass
+        report.applied += 1
+        report.nodes_touched += len(result.nodes)
+        report.edges_touched += len(result.edges)
+    return report
+
+
+def read_sentence_list(path: Path) -> List[str]:
+    """Read a curated sentence list: one sentence per line, ``#`` comments and
+    blank lines skipped."""
+    sentences: List[str] = []
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            sentences.append(line)
+    return sentences
+
+
 def report_from_file(results_path: Path, sample_size: int = DEFAULT_SAMPLE_SIZE) -> IngestReport:
     """Rebuild an IngestReport from a saved results JSONL file.
 
@@ -727,6 +801,28 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--persist",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Persist a hand-reviewed sentence list into the graph (one "
+            "sentence per line, '#' comments allowed). The salience gate is "
+            "not re-applied: the list carries the human decision, exactly "
+            "like review_held's keep path. Requires Ollama."
+        ),
+    )
+    parser.add_argument(
+        "--persist-db",
+        type=str,
+        default=None,
+        metavar="DB",
+        help=(
+            "Database file --persist writes to (default: the configured "
+            "LIFEGRAPH_DB_PATH)."
+        ),
+    )
+    parser.add_argument(
         "--report-only",
         type=Path,
         default=None,
@@ -759,6 +855,35 @@ def main(argv: Sequence[str] | None = None) -> int:
             "parser can be built.",
         )
         return 2
+
+    # --persist: apply a hand-reviewed sentence list to the graph, then exit.
+    if args.persist is not None:
+        if not args.persist.exists():
+            print(f"Sentence list not found: {args.persist}")
+            return 1
+        from lifegraph.config import DEFAULT_DB_PATH
+        from lifegraph.factory import make_store
+
+        db_path = args.persist_db or os.environ.get(
+            "LIFEGRAPH_DB_PATH", DEFAULT_DB_PATH
+        )
+        sentences = read_sentence_list(args.persist)
+        print(f"Persisting {len(sentences)} reviewed sentences into {db_path} ...")
+        try:
+            persist_report = persist_reviewed(sentences, parser, make_store(db_path))
+        except (OllamaUnavailableError, OllamaTimeoutError) as exc:
+            print(
+                "Ollama is not reachable, so sentences cannot be parsed. Start "
+                f"it with `ollama serve` (127.0.0.1:11434) and retry.\n  detail: {exc}",
+            )
+            return 3
+        print(
+            f"applied: {persist_report.applied}   failed: {persist_report.failed}   "
+            f"nodes: {persist_report.nodes_touched}   edges: {persist_report.edges_touched}"
+        )
+        for sentence, error in persist_report.failures:
+            print(f"  FAILED: \"{_truncate(sentence, 80)}\" -> {_truncate(error, 80)}")
+        return 0 if persist_report.failed == 0 else 1
 
     try:
         report = run_ingest(
