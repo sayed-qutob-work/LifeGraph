@@ -1,19 +1,44 @@
-# frontend
+# Personal data — the graph DB and ingest verdicts stay on this machine only
+backend/lifegraph.db
+backend/lifegraph.db-shm
+backend/lifegraph.db-wal
+backend/lifegraph.db.bak
+*_results.jsonl
+context.md
+backend/curated.txt
+backend/export_ingest.log
+backend/export_ingest_err.log
+
+# Python
+.venv/
+backend/.venv/
+backend/__pycache__/
+**/__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# Node
 frontend/node_modules/
 frontend/dist/
+
+# Env
+.env
+.env.*
+backend/.env
+backend/.env.*
 frontend/.env
 frontend/.env.*
 
-# backend
-backend/.venv/
-backend/__pycache__/
-backend/.env
-backend/.env.*
-*.pyc
-ingest_results.jsonl
+# Logs / scratch
+*.log
 
 # OS/editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
+# Local Claude Code settings (personal)
+.claude/settings.local.json
