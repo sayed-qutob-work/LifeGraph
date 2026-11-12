@@ -80,4 +80,6 @@ So the project is paused rather than pushed: the loop works, the graph is popula
 
 ## License / privacy
 
-Personal project. The graph database (`backend/lifegraph.db*`) and ingest verdict files (`*_results.jsonl`) contain personal data and are gitignored — if you fork this, keep it that way.
+MIT, see [LICENSE](LICENSE).
+
+The graph database (`backend/lifegraph.db*`) and ingest verdict files (`*_results.jsonl`) contain personal data and are gitignored — if you fork this, keep it that way.

@@ -43,3 +43,6 @@ Thumbs.db
 # Local Claude Code settings (personal)
 .claude/settings.local.json
 backend/curated_retry.txt
+
+# Stray database created when the app is run from the repo root
+/lifegraph.db*
